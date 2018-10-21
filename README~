@@ -1,0 +1,59 @@
+SVN Version No - 204
+Build uploaded on 29/06/2017
+
+New Changes:- 
+	1: Resolve duplicate message issue(EDUKSMOB Issue No: 614).
+		> Change the response message from 'Block deleted successfully' to 'Block already deleted.' in case if message already deleted.
+		> Change in query while receiving the block. It will return the list of block which status is not equal to DELETED.
+		> Change in BlockService.java#taskToNotify(...).
+
+	2: Change in Global Exception Handler.
+		> Change of exception message.
+--------------------------------------------------------------------------------------------------------------------------------------
+SVN Version No - 217
+Build uploaded on 03/07/2017
+
+New Changes:-
+	1: Change Dynamic IPs to Elastic IPs.
+--------------------------------------------------------------------------------------------------------------------------------------
+SVN Version No - 249
+Build uploaded on 07/07/2017
+
+New Changes:-
+	1: Added 2 new Apis.
+		> To get reports log data.
+		> To get block statistics.
+		> Changes in code related to these Apis
+
+	2: Added logs for report logging.
+		> Changes in code related to this.
+
+	3: Fixed issue of resource blocking.(After sometimes NotificationReceiver stopped receiving the data from other nodes).
+		> Change in NotificationReceiver#listenNotification(...)(Added resource.close()).
+
+--------------------------------------------------------------------------------------------------------------------------------------
+SVN Version No - 359
+Build uploaded on 07/08/2017(On Staging server)
+
+New Changes:-
+	1: Fixed issue for Failing requests on parallel multiple hit.
+		> Changes some classes from Singlton to Prototype.
+		> Added ObjectFactory<T> in BlockService.java.
+	2: Push Notification implemented.
+	3: Sending push notification from only one node is implemented but commented.
+	4: BlockChain synchronization is implemented but commented now due to lack of proper testing.
+		
+--------------------------------------------------------------------------------------------------------------------------------------
+SVN Version No - 429
+Build uploaded on 23/08/2017(On Staging server)
+
+New Changes:- 
+	1: Optimize/Fixed code for the /getBlocks API.
+		> Add '?useServerPrepStmts=false&rewriteBatchedStatements=true' statement in database conneciton url in db_config.properties file.
+		> Change in BlockService#getBlockList(...).
+		> Added TemporaryUrlDownload#bulkUrlInsert(...).
+	2: Change in log4j.properties file(To not write log data into catalina.out file).
+	3: Synchronization for three nodes is done(Done for five nodes as well but need to test more for little confirmation).
+		> Code is disabled for staging build for now.
+	4: Change in /getStatistics API.
+		> Code is not in uploaded build(Code write after build upload).

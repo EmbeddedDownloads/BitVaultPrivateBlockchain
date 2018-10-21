@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:tx="http://www.springframework.org/schema/tx"
+	xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:task="http://www.springframework.org/schema/task" xmlns:batch="http://www.springframework.org/schema/batch"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans
+    
+      http://www.springframework.org/schema/beans/spring-beans-4.1.xsd	
+      http://www.springframework.org/schema/tx	
+      http://www.springframework.org/schema/tx/spring-tx-4.1.xsd	
+      http://www.springframework.org/schema/context 	
+      http://www.springframework.org/schema/context/spring-context-4.1.xsd
+      http://www.springframework.org/schema/task
+	  http://www.springframework.org/schema/task/spring-task-4.3.xsd
+      http://www.springframework.org/schema/batch
+	  http://www.springframework.org/schema/batch/spring-batch-3.0.xsd">
+
+	<context:annotation-config />
+	<context:component-scan base-package="com.pbc.blockchain" />
+	<context:component-scan base-package="com.pbc.blockchain.creation" />
+	<context:component-scan base-package="com.pbc.models" />
+	<context:component-scan base-package="com.pbc.notification" />
+	<context:component-scan base-package="com.pbc.repository" />
+	<context:component-scan base-package="com.pbc.repository.impl" />
+	<context:component-scan base-package="com.pbc.restcontroller" />
+	<context:component-scan base-package="com.pbc.service" />
+	<context:component-scan base-package="com.pbc.threads" />
+	<context:component-scan base-package="com.pbc.utility" />
+	<context:property-placeholder location="classpath:db_config.properties" />
+
+	<!-- dataSource configuration -->
+	<bean id="dataSource"
+		class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+		<property name="driverClassName" value="com.mysql.jdbc.Driver" />
+		<property name="url" value="${url}" />
+		<property name="username" value="${username}" />
+		<property name="password" value="${password}" />
+	</bean>
+
+	<bean id="namedParameterJdbcTemplate"
+		class="org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate">
+		<constructor-arg ref="dataSource" />
+	</bean>
+	<bean id="txManager"
+		class="org.springframework.jdbc.datasource.DataSourceTransactionManager">
+		<property name="dataSource" ref="dataSource" />
+	</bean>
+</beans>

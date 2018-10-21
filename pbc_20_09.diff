@@ -1,0 +1,2733 @@
+Index: README
+===================================================================
+--- README	(revision 456)
++++ README	(working copy)
+@@ -44,10 +44,10 @@
+ 	4: BlockChain synchronization is implemented but commented now due to lack of proper testing.
+ 		
+ --------------------------------------------------------------------------------------------------------------------------------------
+-SVN Version No - 
++SVN Version No - 429
+ Build uploaded on 23/08/2017(On Staging server)
+ 
+-New Changes:-
++New Changes:- 
+ 	1: Optimize/Fixed code for the /getBlocks API.
+ 		> Add '?useServerPrepStmts=false&rewriteBatchedStatements=true' statement in database conneciton url in db_config.properties file.
+ 		> Change in BlockService#getBlockList(...).
+@@ -56,4 +56,13 @@
+ 	3: Synchronization for three nodes is done(Done for five nodes as well but need to test more for little confirmation).
+ 		> Code is disabled for staging build for now.
+ 	4: Change in /getStatistics API.
+-		> Code is not in uploaded build(Code write after build upload).
+\ No newline at end of file
++		> Code is not in uploaded build(Code write after build upload).
++
++--------------------------------------------------------------------------------------------------------------------------------------
++SVN Version No - 
++Build uploaded on 20/09/2017(On Staging server)
++
++New Changes:- 
++	1: Changes byte arrays to streams
++	2: Changes in PBCException class.
++	3: Changes in CustomResponse class.
+Index: pom.xml
+===================================================================
+--- pom.xml	(revision 456)
++++ pom.xml	(working copy)
+@@ -65,6 +65,7 @@
+ 			<artifactId>mysql-connector-java</artifactId>
+ 			<version>${mysql-connector-version}</version>
+ 		</dependency>
++		<!--END MySql-Connector -->
+ 
+ 		<dependency>
+ 			<groupId>javax.servlet</groupId>
+@@ -95,6 +96,11 @@
+ 			<artifactId>commons-dbcp</artifactId>
+ 			<version>${commons-dbcp-version}</version>
+ 		</dependency>
++		<dependency>
++			<groupId>com.google.code.gson</groupId>
++			<artifactId>gson</artifactId>
++			<version>2.8.0</version>
++		</dependency>
+ 
+ 		<!-- Test Dependencies -->
+ 		<dependency>
+@@ -127,8 +133,7 @@
+ 			<artifactId>spring-test</artifactId>
+ 			<version>${spring-test-version}</version>
+ 		</dependency>
+-		<!-- //Test Dependencies -->
+-
++		<!--END Test Dependencies -->
+ 	</dependencies>
+ 
+ 	<build>
+Index: src/main/java/com/pbc/blockchain/Block.java
+===================================================================
+--- src/main/java/com/pbc/blockchain/Block.java	(revision 456)
++++ src/main/java/com/pbc/blockchain/Block.java	(working copy)
+@@ -1,10 +1,13 @@
+ package com.pbc.blockchain;
+ 
++import java.io.Serializable;
++
+ import javax.xml.bind.annotation.XmlRootElement;
+ 
+ @XmlRootElement
+-public class Block {
++public class Block implements Serializable {
+ 
++	private static final long serialVersionUID = 1452584753723526895L;
+ 	private String blockHash;
+ 	private BlockHeader header;
+ 	private BlockContent blockContent;
+Index: src/main/java/com/pbc/blockchain/BlockContent.java
+===================================================================
+--- src/main/java/com/pbc/blockchain/BlockContent.java	(revision 456)
++++ src/main/java/com/pbc/blockchain/BlockContent.java	(working copy)
+@@ -1,10 +1,13 @@
+ package com.pbc.blockchain;
+ 
++import java.io.Serializable;
++
+ import javax.xml.bind.annotation.XmlRootElement;
+ 
+ @XmlRootElement
+-public class BlockContent implements Comparable<BlockContent> {
++public class BlockContent implements Comparable<BlockContent>, Serializable {
+ 
++	private static final long serialVersionUID = 5117950191240409824L;
+ 	private String crc;
+ 	private String tag;
+ 	private String pbcId;
+@@ -126,7 +129,7 @@
+ 		} else if (this.timestamp < other.getTimestamp()) {
+ 			return -1;
+ 		} else {
+-			return this.getHashTxnId().compareTo(other.getHashTxnId());
++			return (this.getTag() + this.getHashTxnId()).compareTo(other.getTag() + other.getHashTxnId());
+ 		}
+ 	}
+ 
+Index: src/main/java/com/pbc/blockchain/BlockHeader.java
+===================================================================
+--- src/main/java/com/pbc/blockchain/BlockHeader.java	(revision 456)
++++ src/main/java/com/pbc/blockchain/BlockHeader.java	(working copy)
+@@ -1,10 +1,13 @@
+ package com.pbc.blockchain;
+ 
++import java.io.Serializable;
++
+ import javax.xml.bind.annotation.XmlRootElement;
+ 
+ @XmlRootElement
+-public class BlockHeader {
++public class BlockHeader implements Serializable {
+ 
++	private static final long serialVersionUID = -7507604889588918185L;
+ 	private long timeStamp;
+ 	private String prevHash;
+ 
+Index: src/main/java/com/pbc/blockchain/creation/Persistor.java
+===================================================================
+--- src/main/java/com/pbc/blockchain/creation/Persistor.java	(revision 456)
++++ src/main/java/com/pbc/blockchain/creation/Persistor.java	(working copy)
+@@ -1,6 +1,8 @@
+ package com.pbc.blockchain.creation;
+ 
+ import java.util.List;
++import java.util.concurrent.locks.ReadWriteLock;
++import java.util.concurrent.locks.ReentrantReadWriteLock;
+ 
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ 
+@@ -19,6 +21,7 @@
+ 	long SEPARATOR_SIZE = SEPARATOR.getBytes().length;
+ 	String SINGLE_SPACE = " ";
+ 	String TRIMMED_LINE = SEPARATOR.trim();
++	ReadWriteLock globalLock = new ReentrantReadWriteLock();
+ 
+ 	ObjectMapper om = new ObjectMapper();
+ 
+Index: src/main/java/com/pbc/blockchain/creation/SingleFileJsonPersistor.java
+===================================================================
+--- src/main/java/com/pbc/blockchain/creation/SingleFileJsonPersistor.java	(revision 456)
++++ src/main/java/com/pbc/blockchain/creation/SingleFileJsonPersistor.java	(working copy)
+@@ -17,8 +17,6 @@
+ import java.util.TreeSet;
+ import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.CopyOnWriteArrayList;
+-import java.util.concurrent.locks.ReadWriteLock;
+-import java.util.concurrent.locks.ReentrantReadWriteLock;
+ 
+ import org.apache.log4j.Logger;
+ import org.springframework.stereotype.Component;
+@@ -55,7 +53,6 @@
+ 	private final List<String> hashList = new CopyOnWriteArrayList<>();
+ 
+ 	private final String BLOCKCHAIN_CONTROLLER = ConfigConstants.BLOCKCHAIN_CONTROLLER;
+-	private final ReadWriteLock globalLock = new ReentrantReadWriteLock();
+ 
+ 	public TreeSet<BlockContent> getOrderedSet() {
+ 		return orderedBlockSet;
+@@ -148,7 +145,7 @@
+ 			orderedBlockSet.remove(blockContent);
+ 			logger.error("An Exception occured while adding block in data ", e);
+ 			throw new BlockProcessingException("An Exception occured while adding block in data ", e);
+-		} 
++		}
+ 	}
+ 
+ 	/**
+Index: src/main/java/com/pbc/context/StartupContextInitBean.java
+===================================================================
+--- src/main/java/com/pbc/context/StartupContextInitBean.java	(revision 456)
++++ src/main/java/com/pbc/context/StartupContextInitBean.java	(working copy)
+@@ -7,15 +7,19 @@
+ 
+ import com.pbc.blockchain.Block;
+ import com.pbc.blockchain.creation.Persistor;
++import com.pbc.utility.GetSystemIp;
+ 
+ @Configuration
+ public class StartupContextInitBean {
+ 
+ 	@Autowired
++	private GetSystemIp systemIp;
++	@Autowired
+ 	private Persistor<Block> jsonPersistor;
+ 
+ 	@PostConstruct
+ 	public void initializeNodeBlockChain() {
+ 		jsonPersistor.initializeNodeStartup();
++		systemIp.initializeIpLocal();
+ 	}
+ }
+Index: src/main/java/com/pbc/exception/PBCException.java
+===================================================================
+--- src/main/java/com/pbc/exception/PBCException.java	(revision 456)
++++ src/main/java/com/pbc/exception/PBCException.java	(working copy)
+@@ -10,7 +10,6 @@
+ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
+ 
+ import com.pbc.models.CustomErrorResponse;
+-import com.pbc.models.CustomResponse;
+ 
+ @ControllerAdvice
+ public class PBCException extends ResponseEntityExceptionHandler {
+@@ -18,32 +17,37 @@
+ 	private final Logger logger = Logger.getLogger(PBCException.class);
+ 
+ 	@ExceptionHandler(DataException.class)
+-	public ResponseEntity<CustomResponse<String>> handleDataException(final DataException de) {
++	public ResponseEntity<String> handleDataException(final DataException de) {
+ 		logger.error("Global DataException ", de);
+-		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(de.getMessage()), HttpStatus.OK);
++		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(de.getMessage()).toString(),
++				HttpStatus.OK);
+ 	}
+ 
+ 	@ExceptionHandler(ServiceException.class)
+-	public ResponseEntity<CustomResponse<String>> handleServiceException(final ServiceException se) {
++	public ResponseEntity<String> handleServiceException(final ServiceException se) {
+ 		logger.error("Global ServiceException ", se);
+-		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(se.getMessage()), HttpStatus.OK);
++		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(se.getMessage()).toString(),
++				HttpStatus.OK);
+ 	}
+ 
+ 	@ExceptionHandler(BlockProcessingException.class)
+-	public ResponseEntity<CustomResponse<String>> handleBlockNotFoundException(final BlockProcessingException bpe) {
++	public ResponseEntity<String> handleBlockNotFoundException(final BlockProcessingException bpe) {
+ 		logger.error("Global BlockProcessingException ", bpe);
+-		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(bpe.getMessage()), HttpStatus.OK);
++		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(bpe.getMessage()).toString(),
++				HttpStatus.OK);
+ 	}
+ 
+ 	@ExceptionHandler(FileNotFoundException.class)
+-	public ResponseEntity<CustomResponse<String>> handleFileNotFoundException(final FileNotFoundException fne) {
++	public ResponseEntity<String> handleFileNotFoundException(final FileNotFoundException fne) {
+ 		logger.error("Global FileNotFoundException ", fne);
+-		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(fne.getMessage()), HttpStatus.OK);
++		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(fne.getMessage()).toString(),
++				HttpStatus.OK);
+ 	}
+ 
+ 	@ExceptionHandler(Exception.class)
+-	public ResponseEntity<CustomResponse<String>> handleGlobalException(final Exception e) {
++	public ResponseEntity<String> handleGlobalException(final Exception e) {
+ 		logger.error("Global Exception ", e);
+-		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(e.getMessage()), HttpStatus.OK);
++		return new ResponseEntity<>(new CustomErrorResponse<String>().setMessage(e.getMessage()).toString(),
++				HttpStatus.OK);
+ 	}
+ }
+\ No newline at end of file
+Index: src/main/java/com/pbc/job/BlockChainSynchronizationJob.java
+===================================================================
+--- src/main/java/com/pbc/job/BlockChainSynchronizationJob.java	(revision 456)
++++ src/main/java/com/pbc/job/BlockChainSynchronizationJob.java	(working copy)
+@@ -3,7 +3,6 @@
+ import java.util.concurrent.Executor;
+ 
+ import org.apache.log4j.Logger;
+-import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.context.annotation.Bean;
+ import org.springframework.context.annotation.Configuration;
+ import org.springframework.core.task.SimpleAsyncTaskExecutor;
+@@ -12,13 +11,6 @@
+ import org.springframework.scheduling.annotation.EnableScheduling;
+ import org.springframework.scheduling.annotation.Scheduled;
+ 
+-import com.fasterxml.jackson.core.JsonProcessingException;
+-import com.fasterxml.jackson.databind.ObjectMapper;
+-import com.pbc.blockchain.Block;
+-import com.pbc.blockchain.creation.Persistor;
+-import com.pbc.blockchain.creation.SingleFileJsonPersistor;
+-import com.pbc.service.TransactionMessageService;
+-
+ @Configuration
+ @EnableAsync
+ @EnableScheduling
+@@ -25,24 +17,24 @@
+ public class BlockChainSynchronizationJob {
+ 
+ 	private static final Logger logger = Logger.getLogger(BlockChainSynchronizationJob.class);
++	//
++	// @Autowired
++	// private Persistor<Block> persistor;
++	//
++	// @Autowired
++	// private TransactionMessageService transactionMessageService;
++	//
++	// @Autowired
++	// private BlockSynchronizationSender synchronizationSender;
++	//
++	// @Autowired
++	// private SyncProcessThread processThread;
++	//
++	// @Autowired
++	// private ProcessAllMapReceived allMapReceived;
++	//
++	// private final ObjectMapper om = new ObjectMapper();
+ 
+-	@Autowired
+-	private Persistor<Block> persistor;
+-
+-	@Autowired
+-	private TransactionMessageService transactionMessageService;
+-
+-	@Autowired
+-	private BlockSynchronizationSender synchronizationSender;
+-
+-	@Autowired
+-	private SyncProcessThread processThread;
+-
+-	@Autowired
+-	private ProcessAllMapReceived allMapReceived;
+-
+-	private final ObjectMapper om = new ObjectMapper();
+-
+ 	@Bean
+ 	public Executor getExecutor() {
+ 		final SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor();
+@@ -51,29 +43,31 @@
+ 	}
+ 
+ 	@Async
+-	@Scheduled(cron = "0 0/10 0-23 * * *")
++	@Scheduled(cron = "0 0/15 0-23 * * *")
+ 	public void startSynchronizationProcess() {
+ 		logger.info("Scheduler start for block synchronization");
+ 
+-		SingleFileJsonPersistor<Block> singleFileJsonPersistor = null;
+-		if (persistor instanceof SingleFileJsonPersistor<?>) {
+-			singleFileJsonPersistor = (SingleFileJsonPersistor<Block>) persistor;
+-		}
+-		if (null != singleFileJsonPersistor) {
+-			getExecutor().execute(processThread);
+-
+-			final Thread thread = new Thread(allMapReceived);
+-			thread.start();
+-			final PbcSyncModel pbcSyncModel = new PbcSyncModel(singleFileJsonPersistor.getOrderedSet(),
+-					transactionMessageService.getConfirmationMap(), singleFileJsonPersistor.getHashList());
+-			try {
+-				synchronizationSender.setInitialSyncData(om.writeValueAsString(pbcSyncModel));
+-				synchronizationSender.sendPbcSyncNotification();
+-			} catch (final JsonProcessingException jpe) {
+-				logger.error("Can not write value as string : ", jpe);
+-			} catch (final Exception e) {
+-				logger.error("Problem constructing initial synchronization data ", e);
+-			}
+-		}
++		// SingleFileJsonPersistor<Block> singleFileJsonPersistor = null;
++		// if (persistor instanceof SingleFileJsonPersistor<?>) {
++		// singleFileJsonPersistor = (SingleFileJsonPersistor<Block>) persistor;
++		// }
++		// if (null != singleFileJsonPersistor) {
++		// getExecutor().execute(processThread);
++		// final Thread thread = new Thread(allMapReceived);
++		// thread.start();
++		// final PbcSyncModel pbcSyncModel = new
++		// PbcSyncModel(singleFileJsonPersistor.getOrderedSet(),
++		// transactionMessageService.getConfirmationMap(),
++		// singleFileJsonPersistor.getHashList());
++		// try {
++		// synchronizationSender.setInitialSyncData(om.writeValueAsString(pbcSyncModel));
++		// synchronizationSender.sendPbcSyncNotification();
++		// } catch (final JsonProcessingException jpe) {
++		// logger.error("Can not write value as string : ", jpe);
++		// } catch (final Exception e) {
++		// logger.error("Problem constructing initial synchronization data ",
++		// e);
++		// }
++		// }
+ 	}
+ }
+Index: src/main/java/com/pbc/job/BlockDataReceiverThread.java
+===================================================================
+--- src/main/java/com/pbc/job/BlockDataReceiverThread.java	(revision 456)
++++ src/main/java/com/pbc/job/BlockDataReceiverThread.java	(working copy)
+@@ -1,12 +1,10 @@
+ package com.pbc.job;
+ 
+-import java.io.BufferedReader;
+-import java.io.InputStream;
+-import java.io.InputStreamReader;
++import java.io.DataInputStream;
+ import java.net.ServerSocket;
+ import java.net.Socket;
+-import java.util.HashMap;
+ import java.util.Map;
++import java.util.concurrent.ConcurrentHashMap;
+ 
+ import org.apache.log4j.Logger;
+ import org.springframework.beans.factory.annotation.Autowired;
+@@ -43,10 +41,8 @@
+ 	 * Contains Host as Key and value is Map of GetStatusRequest(tag,
+ 	 * transaction key) and corresponding status.
+ 	 */
+-	private static Map<String, Map<GetStatusRequest, String>> mapHostStatus = new HashMap<>();
+-
+-	final GsonBuilder gsonBuilder = new GsonBuilder();
+-	final Gson gson = gsonBuilder.enableComplexMapKeySerialization().setPrettyPrinting().create();
++	static Map<String, Map<GetStatusRequest, String>> mapHostStatus = new ConcurrentHashMap<>();
++	Gson gson = new GsonBuilder().enableComplexMapKeySerialization().setPrettyPrinting().create();
+ 	String status = "";
+ 
+ 	@Override
+@@ -57,7 +53,6 @@
+ 			while (true) {
+ 				try {
+ 					final Socket socket;
+-
+ 					try {
+ 						socket = serverSocket.accept();
+ 						socket.setSoTimeout(1000 * 60);
+@@ -65,41 +60,48 @@
+ 						continue;
+ 					}
+ 					final Runnable listener = () -> {
+-						try (final InputStream inputStream = socket.getInputStream();
+-								final BufferedReader bufferedReader = new BufferedReader(
+-										new InputStreamReader(inputStream));) {
+-							final StringBuilder builder = new StringBuilder();
+-							String line = null;
+-							while ((line = bufferedReader.readLine()) != null) {
+-								builder.append(line);
++						try (DataInputStream dataIn = new DataInputStream(socket.getInputStream());) {
++							// ObjectInputStream ois = new
++							// ObjectInputStream(socket.getInputStream());
++							// final SyncBlockDataModel
++							// receivedBlockAndFileModel = (SyncBlockDataModel)
++							// ois.readObject();
++							String jsonString = "";
++							try {
++								jsonString = "" + dataIn.readUTF();
++							} catch (final Exception e) {
++								logger.info("Need to worry:" + e);
+ 							}
++							logger.info("Streamed message: " + jsonString);
++							final SyncBlockDataModel receivedBlockAndFileModel = gson.fromJson(jsonString,
++									SyncBlockDataModel.class);
+ 
+-							final SyncBlockDataModel receivedBlockAndFileModel = gson.fromJson(builder.toString(),
+-									SyncBlockDataModel.class);
+-							if (receivedBlockAndFileModel.getMapWithStatus() != null) {
++							if (null == receivedBlockAndFileModel) {
++							} else if (receivedBlockAndFileModel.getMapWithStatus() != null) {
+ 								logger.info("Message Received: " + receivedBlockAndFileModel.toString()
+ 										+ " from the Host: " + socket.getInetAddress().getHostAddress());
+-								final Map<GetStatusRequest, String> mapWithStatus = new HashMap<>();
++								final Map<GetStatusRequest, String> mapWithStatus = new ConcurrentHashMap<>();
+ 								mapWithStatus.putAll(receivedBlockAndFileModel.getMapWithStatus());
+ 								mapHostStatus.put(socket.getInetAddress().getHostAddress(), mapWithStatus);
+-							} else if (receivedBlockAndFileModel.getBlock() != null
+-									&& receivedBlockAndFileModel.getFile() != null) {
+-								final byte[] file = receivedBlockAndFileModel.getFile();
++							} else if (receivedBlockAndFileModel.getBlock() != null) {
++								// final byte[] file =
++								// receivedBlockAndFileModel.getFile();
+ 								final String tag = receivedBlockAndFileModel.getBlock().getBlockContent().getTag();
+ 								final String transactionId = receivedBlockAndFileModel.getBlock().getBlockContent()
+ 										.getHashTxnId();
+-
+-								logger.info("Block data received " + receivedBlockAndFileModel.getBlock().toString());
+-								logger.info("Downloading the File....... for transaction id " + transactionId);
+-
++								// logger.info("Block data received " +
++								// receivedBlockAndFileModel.getBlock().toString());
++								logger.info("Downloading the File for transaction id " + transactionId);
+ 								// Downloading the file.................
+-								final String filePath = ioFileUtil.writObjectLocally(file, tag + transactionId);
++								final String filePath = ioFileUtil.writObjectLocally(dataIn, tag + transactionId);
++								// Clear byte array
++								// Arrays.fill(file, (byte) 0);
+ 								logger.info("File downloading Completed for transaction id " + transactionId);
+ 
+ 								BlockStatus blockStatus = blockService.getBlockStatus(tag, transactionId);
+-
+ 								if (null == blockStatus) {
+ 									blockStatus = getBlockStatusObject(receivedBlockAndFileModel.getBlock());
++									blockService.insert(blockStatus);
+ 								}
+ 								status = blockStatus.getStatus();
+ 								logger.info("DB status for transaction id " + transactionId + " is " + status);
+@@ -108,7 +110,7 @@
+ 									// Do Nothing
+ 									logger.info("Not saving the block because current status is " + status);
+ 								} else {
+-									blockService.insert(blockStatus);
++
+ 									createAndSaveBlock(receivedBlockAndFileModel.getBlock(), filePath);
+ 									logger.info("Creating Block in BlockController for txnId : " + transactionId);
+ 								}
+@@ -129,7 +131,9 @@
+ 					logger.error("Error occured in saving block ", e);
+ 				}
+ 			}
+-		} catch (final Exception e) {
++		} catch (
++
++		final Exception e) {
+ 			logger.error("Problem Occurred due to ", e);
+ 		}
+ 	}
+Index: src/main/java/com/pbc/job/BlockSynchronizationReceiver.java
+===================================================================
+--- src/main/java/com/pbc/job/BlockSynchronizationReceiver.java	(revision 456)
++++ src/main/java/com/pbc/job/BlockSynchronizationReceiver.java	(working copy)
+@@ -16,7 +16,7 @@
+ import com.fasterxml.jackson.databind.JsonMappingException;
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import com.pbc.utility.ConfigConstants;
+-import com.pbc.utility.StringConstants;
++import com.pbc.utility.GetSystemIp;
+ 
+ @Component
+ public class BlockSynchronizationReceiver {
+@@ -23,9 +23,6 @@
+ 
+ 	private static final Logger logger = Logger.getLogger(BlockSynchronizationReceiver.class);
+ 
+-	// @Autowired
+-	// private BlockSynchronizationSender blockSynchronizationSender;
+-
+ 	final ObjectMapper om = new ObjectMapper();
+ 
+ 	/**
+@@ -49,8 +46,7 @@
+ 	}
+ 
+ 	/**
+-	 * Clear {@link #receivedSyncModelMap} once {@link SyncProcessThread}
+-	 * finished;
++	 * Clear {@link #receivedSyncModelMap} once {@link SyncProcessThread} finished;
+ 	 */
+ 	public void clearReceivedSyncModelMap() {
+ 		receivedSyncModelMap.clear();
+@@ -70,7 +66,6 @@
+ 				logger.error("PBC Sync server socket not closed properly.");
+ 				return;
+ 			}
+-
+ 			while (true) {
+ 				if (accept) {
+ 					final Socket receivedSocket;
+@@ -87,7 +82,6 @@
+ 									+ receivedSocket.getInetAddress().getHostAddress());
+ 							parseSyncNotificationData(receivedSocket.getInetAddress().getHostAddress(), inputStream);
+ 							sb.setLength(0);
+-							// addHostInList(receivedSocket);
+ 						} catch (final Exception e) {
+ 							logger.error("Data got some exception " + e.getMessage());
+ 						} finally {
+@@ -108,8 +102,8 @@
+ 	}
+ 
+ 	/**
+-	 * Check availability of some port before connection. This method will be
+-	 * needed only if server socket is not set to be reusable using
++	 * Check availability of some port before connection. This method will be needed
++	 * only if server socket is not set to be reusable using
+ 	 * <code>setReuseAddress(true)</code>>.
+ 	 *
+ 	 * @param serverPortNumber
+@@ -116,7 +110,7 @@
+ 	 * @return
+ 	 */
+ 	private boolean available() {
+-		try (Socket ignored = new Socket(StringConstants.LOCAL_HOST, ConfigConstants.PORT_NO_SYNCHRONIZATION)) {
++		try (Socket ignored = new Socket(GetSystemIp.getSystemLocalIp(), ConfigConstants.PORT_NO_SYNCHRONIZATION)) {
+ 			return false;
+ 		} catch (final IOException ignoredException) {
+ 			return true;
+@@ -123,12 +117,6 @@
+ 		}
+ 	}
+ 
+-	// private void addHostInList(final Socket receivedSocket) {
+-	// final String currentSocketAddress =
+-	// receivedSocket.getInetAddress().getHostAddress();
+-	// blockSynchronizationSender.addHostInList(currentSocketAddress);
+-	// }
+-
+ 	/**
+ 	 * Parse received data and map.
+ 	 *
+@@ -139,7 +127,6 @@
+ 		logger.info("Received synchronization data");
+ 		try {
+ 			final PbcSyncModel receivedPbcSyncModel = om.readValue(inputStream, PbcSyncModel.class);
+-			logger.info("Received synchronization data " + receivedPbcSyncModel.toString());
+ 			receivedSyncModelMap.put(host, receivedPbcSyncModel);
+ 		} catch (final JsonParseException e) {
+ 			logger.error("Preblem in parsing received sync data ", e);
+Index: src/main/java/com/pbc/job/BlockSynchronizationSender.java
+===================================================================
+--- src/main/java/com/pbc/job/BlockSynchronizationSender.java	(revision 456)
++++ src/main/java/com/pbc/job/BlockSynchronizationSender.java	(working copy)
+@@ -14,7 +14,7 @@
+ import org.apache.log4j.Logger;
+ import org.springframework.stereotype.Component;
+ 
+-import com.pbc.utility.StringConstants;
++import com.pbc.utility.GetSystemIp;
+ 
+ @Component
+ public class BlockSynchronizationSender {
+@@ -31,7 +31,7 @@
+ 	}
+ 
+ 	public void addHostInList(final String newNode) {
+-		if (!listOfHosts.contains(newNode) && !newNode.equals(StringConstants.LOCAL_HOST)) {
++		if (!listOfHosts.contains(newNode) && !newNode.equals(GetSystemIp.getSystemLocalIp())) {
+ 			listOfHosts.add(newNode);
+ 		}
+ 	}
+@@ -41,9 +41,8 @@
+ 	}
+ 
+ 	/**
+-	 * Send data to all host listed in {@link #listOfHosts}. Don't forget to
+-	 * call {@link #setInitialSyncData(String)} to set data before calling this
+-	 * method.
++	 * Send data to all host listed in {@link #listOfHosts}. Don't forget to call
++	 * {@link #setInitialSyncData(String)} to set data before calling this method.
+ 	 */
+ 	public void sendPbcSyncNotification() {
+ 		logger.info("Sending data start for block synchronization.");
+@@ -58,7 +57,7 @@
+ 				bw.close();
+ 				osw.close();
+ 				logger.info("PBC Sync data send for host : " + host);
+-				logger.info("Send sync data : " + initialSyncData);
++				// logger.info("Send sync data : " + initialSyncData);
+ 				return Boolean.TRUE;
+ 			} catch (final Exception e) {
+ 				logger.error(host + " is unable to reach ", e);
+Index: src/main/java/com/pbc/job/ProcessAllMapReceived.java
+===================================================================
+--- src/main/java/com/pbc/job/ProcessAllMapReceived.java	(revision 456)
++++ src/main/java/com/pbc/job/ProcessAllMapReceived.java	(working copy)
+@@ -4,8 +4,10 @@
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+-import java.util.Random;
++import java.util.concurrent.ConcurrentHashMap;
++import java.util.concurrent.CopyOnWriteArrayList;
+ import java.util.concurrent.ExecutorService;
++import java.util.concurrent.ThreadLocalRandom;
+ 
+ import org.apache.log4j.Logger;
+ import org.springframework.beans.factory.annotation.Autowired;
+@@ -17,6 +19,7 @@
+ import com.pbc.threads.DeleteBlockRunnableTask;
+ import com.pbc.threads.ThreadPoolUtility;
+ import com.pbc.utility.ConfigConstants;
++import com.pbc.utility.GetSystemIp;
+ import com.pbc.utility.IOFileUtil;
+ import com.pbc.utility.StringConstants;
+ 
+@@ -39,9 +42,9 @@
+ 
+ 	private final Long waitForInterval = 1000 * 60 * 2L;
+ 
+-	private final Map<GetStatusRequest, List<String>> mapTxnIdAndStatus = new HashMap<>();
+-	private final Map<GetStatusRequest, List<String>> mapTxnHost = new HashMap<>();
+-	private final List<GetStatusRequest> listOfTxnIdToGet = new ArrayList<>();
++	private final Map<GetStatusRequest, List<String>> mapTxnIdAndStatus = new ConcurrentHashMap<>();
++	private final Map<GetStatusRequest, List<String>> mapTxnHost = new ConcurrentHashMap<>();
++	private final List<GetStatusRequest> listOfTxnIdToGet = new CopyOnWriteArrayList<>();
+ 
+ 	@Override
+ 	public void run() {
+@@ -51,12 +54,11 @@
+ 			final Map<String, Map<GetStatusRequest, String>> mapHostStatus = blockDataReceiverThread.getMapHostStatus();
+ 			if (mapHostStatus != null) {
+ 				logger.info("MapHostStatus size before processing: " + mapHostStatus.size());
+-				final Map<GetStatusRequest, String> mapOfLocalHost = mapHostStatus.get(StringConstants.LOCAL_HOST);
+-				mapHostStatus.remove(StringConstants.LOCAL_HOST);
++				final Map<GetStatusRequest, String> mapOfLocalHost = mapHostStatus.get(GetSystemIp.getSystemLocalIp());
++				mapHostStatus.remove(GetSystemIp.getSystemLocalIp());
+ 				if (null != mapOfLocalHost) {
+ 					logger.info("LocalMap: number of TxnId are: " + mapOfLocalHost.size());
+ 					mapOfLocalHost.forEach((key, value) -> {
+-
+ 						final List<String> listOfStatus = new ArrayList<>();
+ 						final List<String> listOfHost = new ArrayList<>();
+ 						listOfStatus.add(value);
+@@ -69,11 +71,11 @@
+ 							}
+ 						});
+ 						// Map contain TxnId and correspond List of Host that
+-						// have SAVED status for that Txnid.
++						// have SAVED status for that TxnId.
+ 						mapTxnHost.put(key, listOfHost);
+ 						logger.info("MapTxnHost for Txnid: " + mapTxnHost);
+ 						// Map contain TxnId and correspond list contain list of
+-						// status Of that Txnid.
++						// status Of that TxnId.
+ 						mapTxnIdAndStatus.put(key, listOfStatus);
+ 						logger.info("MapTxnIdAndStatus for TxnId: " + mapTxnIdAndStatus);
+ 					});
+@@ -83,21 +85,8 @@
+ 				// Now iterating the map to see for which TxnId we have to get
+ 				// the block And file.
+ 				iterateMapToGetBlock();
+-
+ 			}
+-			final Map<String, List<GetStatusRequest>> mapToSendToHost = new HashMap<>();
+-			listOfTxnIdToGet.forEach((txnId) -> {
+-				final List<String> listOfHost = mapTxnHost.get(txnId);
+-				final int n = new Random().nextInt(ConfigConstants.MIN_NODE_VALIDITY - 1) + 1;
+-
+-				final String hostToSendTxnId = listOfHost.get(n);
+-				final List<GetStatusRequest> listOfTxnId = new ArrayList<>();
+-				listOfTxnId.add(txnId);
+-				mapToSendToHost.put(StringConstants.TXT_BLOCK, listOfTxnId);
+-				logger.info(
+-						"Sending TxnId: " + txnId.getTag() + txnId.getTransactionId() + " To Host: " + hostToSendTxnId);
+-				syncProcessThread.sendTxnListToOtherNode(mapToSendToHost, hostToSendTxnId);
+-			});
++			sendTxnIdToOtherNodes();
+ 		} catch (final InterruptedException e) {
+ 			logger.error("Something wrong", e);
+ 		} finally {
+@@ -106,6 +95,21 @@
+ 		}
+ 	}
+ 
++	public void sendTxnIdToOtherNodes() {
++		final Map<String, List<GetStatusRequest>> mapToSendToHost = new HashMap<>();
++		final List<GetStatusRequest> listOfTxnId = new ArrayList<>();
++		listOfTxnIdToGet.forEach((txnId) -> {
++			final List<String> listOfHost = mapTxnHost.get(txnId);
++			final int n = ThreadLocalRandom.current().nextInt(0, ConfigConstants.MIN_NODE_VALIDITY);
++			final String hostToSendTxnId = listOfHost.get(n);
++			listOfTxnId.add(txnId);
++			mapToSendToHost.put(StringConstants.TXT_BLOCK, listOfTxnId);
++			logger.info("Sending TxnId: " + txnId.getTag() + txnId.getTransactionId() + " To Host: " + hostToSendTxnId);
++			syncProcessThread.sendTxnListToOtherNode(mapToSendToHost, hostToSendTxnId);
++			listOfTxnId.clear();
++		});
++	}
++
+ 	private void clearBuffer() {
+ 		mapTxnIdAndStatus.clear();
+ 		mapTxnHost.clear();
+@@ -114,6 +118,7 @@
+ 
+ 	private void iterateMapToGetBlock() {
+ 		mapTxnIdAndStatus.forEach((key, value) -> {
++			final String combineKey = key.getTag() + key.getTransactionId();
+ 			final long savedCount = value.stream().filter(status -> {
+ 				return status.equals(BlockStatusEnum.SAVED.name());
+ 			}).count();
+@@ -121,37 +126,36 @@
+ 				return status.equals(BlockStatusEnum.DELETED.name());
+ 			}).count();
+ 
+-			logger.info("Count for SAVED : " + savedCount + " Count For DELETED : " + deletedCount + " For TXNID: "
+-					+ key.getTag() + key.getTransactionId());
++			logger.info("Count for SAVED : " + savedCount + " Count For DELETED : " + deletedCount + " For key : "
++					+ combineKey);
+ 			final String statusValueAtLocal = value.get(0);
+ 
+ 			if (statusValueAtLocal.equals(BlockStatusEnum.DELETED.name())) {
+ 				// Do Nothing
+-				logger.info("The local status of TxnId : " + key + " is DELETED.");
++				logger.info("The local status is DELETED for the key " + combineKey);
+ 			} else if (statusValueAtLocal.equals(BlockStatusEnum.SAVED.name())) {
+ 				if (savedCount >= ConfigConstants.MIN_NODE_VALIDITY) {
+ 					// Do Nothing
+-					logger.info("The local status of TxnId: " + key
+-							+ " is SAVED and count of SAVED from another node is: " + savedCount);
++					logger.info("The local status is SAVED for the key " + combineKey
++							+ " and SAVED count from another nodes is " + savedCount);
+ 				} else if (deletedCount >= ConfigConstants.MIN_NODE_VALIDITY) {
+ 					// Make status DELETED of this TxnId and delete this block
+ 					// locally.
+-					logger.info(
+-							"The Local status of TxnId: " + key + " Is SAVED.And count of DELETED from another Node: "
+-									+ deletedCount + " So make status DELETED.");
++					logger.info("The Local status is SAVED and DELETED count from other nodes is " + deletedCount
++							+ " so delete this block from this node for key " + combineKey);
+ 					deleteBlockFromLocal(key.getTag(), key.getTransactionId());
+ 				}
+ 			} else {
+ 				if (savedCount >= ConfigConstants.MIN_NODE_VALIDITY) {
+-					logger.info("THE status is neither DELETED nor SAVED for TxnId: " + key.getTransactionId()
+-							+ " AND now getting the block from other node.");
++					logger.info("The status is neither DELETED nor SAVED for key : " + key.getTransactionId()
++							+ " so now getting the block from other node.");
+ 					// GetBlock FROM other Nodes.
+ 					listOfTxnIdToGet.add(key);
+ 
+ 				} else if (deletedCount >= ConfigConstants.MIN_NODE_VALIDITY) {
+ 					// Make status DELETED and delete file this block locally
+-					logger.info(
+-							"THE status is NOT DELETED NOR SAVED for TXnid: " + key + " AND now deleting the block.");
++					logger.info("The status is neither DELETED nor SAVED for key : " + key.getTransactionId()
++							+ " so now deleting the block from this node.");
+ 					deleteBlockFromLocal(key.getTag(), key.getTransactionId());
+ 				}
+ 			}
+Index: src/main/java/com/pbc/job/SyncBlockDataModel.java
+===================================================================
+--- src/main/java/com/pbc/job/SyncBlockDataModel.java	(revision 456)
++++ src/main/java/com/pbc/job/SyncBlockDataModel.java	(working copy)
+@@ -1,7 +1,6 @@
+ package com.pbc.job;
+ 
+ import java.io.Serializable;
+-import java.util.Arrays;
+ import java.util.Map;
+ 
+ import com.fasterxml.jackson.annotation.JsonInclude;
+@@ -15,7 +14,6 @@
+ 	private static final long serialVersionUID = -7215538099280486186L;
+ 
+ 	private Block block;
+-	private byte[] file;
+ 	private Map<GetStatusRequest, String> mapWithStatus;
+ 
+ 	public Map<GetStatusRequest, String> getMapWithStatus() {
+@@ -34,17 +32,8 @@
+ 		this.block = block;
+ 	}
+ 
+-	public byte[] getFile() {
+-		return file;
+-	}
+-
+-	public void setFile(final byte[] file) {
+-		this.file = file;
+-	}
+-
+ 	@Override
+ 	public String toString() {
+-		return "SyncBlockDataModel [block=" + block + ", file=" + Arrays.toString(file) + ", mapWithStatus="
+-				+ mapWithStatus + "]";
++		return "SyncBlockDataModel [block=" + block + ",  mapWithStatus=" + mapWithStatus + "]";
+ 	}
+-}
++}
+\ No newline at end of file
+Index: src/main/java/com/pbc/job/SyncProcessThread.java
+===================================================================
+--- src/main/java/com/pbc/job/SyncProcessThread.java	(revision 456)
++++ src/main/java/com/pbc/job/SyncProcessThread.java	(working copy)
+@@ -21,8 +21,8 @@
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import com.pbc.blockchain.BlockContent;
+ import com.pbc.models.GetStatusRequest;
+-import com.pbc.service.BlockService;
+ import com.pbc.utility.ConfigConstants;
++import com.pbc.utility.GetSystemIp;
+ import com.pbc.utility.StringConstants;
+ 
+ @Component
+@@ -33,9 +33,6 @@
+ 	@Autowired
+ 	private BlockSynchronizationReceiver synchronizationReceiver;
+ 
+-	@Autowired
+-	private BlockService blockService;
+-
+ 	// Wait to 1 minute so that sync data received properly before start sync
+ 	// process.
+ 	private final Long waitForInterval = 1000 * 60 * 1L;
+@@ -78,36 +75,26 @@
+ 
+ 			receivedSyncModelMap = synchronizationReceiver.getReceivedSyncModelMap();
+ 
+-			if (receivedSyncModelMap.size() > 0 && null != receivedSyncModelMap.get(StringConstants.LOCAL_HOST)) {
+-				localHashList.addAll(receivedSyncModelMap.get(StringConstants.LOCAL_HOST).getHashList());
++			if (receivedSyncModelMap.size() > 0 && null != receivedSyncModelMap.get(GetSystemIp.getSystemLocalIp())) {
++				localHashList.addAll(receivedSyncModelMap.get(GetSystemIp.getSystemLocalIp()).getHashList());
+ 			}
+ 			// Build common set.
+ 			buildCommonBlockSet();
+ 			if (null != receivedSyncModelMap && receivedSyncModelMap.size() >= MIN_NODE_VALIDITY) {
+-
+ 				// Start block synchronization mechanism.
+ 				doSync();
+-
+ 				// Send TxnId with Status to other nodes.
+ 				sendTxnListToOtherNode();
+-
+-				getBlockAndFile();
+-				// Delete the blocks now.
+-				deleteBlocks();
+ 			} else {
+ 				logger.info(
+ 						"Preventing block syncing because no. of communicated host is " + receivedSyncModelMap.size());
+ 			}
+-
+ 			// Clear the collections for fresh data
+ 			cleanSynchronizationBuffers();
+-
+ 			// Clear common set for new incoming data.
+ 			synchronizationReceiver.clearReceivedSyncModelMap();
+-
+ 			// Setting SynchronizationReceiver to accept incoming data now.
+ 			synchronizationReceiver.doAccept(true);
+-
+ 			// Terminating this thread.
+ 			interrupt();
+ 		} catch (final InterruptedException e) {
+@@ -118,10 +105,6 @@
+ 		}
+ 	}
+ 
+-	private void getBlockAndFile() {
+-
+-	}
+-
+ 	private void cleanSynchronizationBuffers() {
+ 		commonBlockSet.clear();
+ 		receiveBlockForTxnIds.clear();
+@@ -150,94 +133,10 @@
+ 		commonBlockSet.forEach(blockContent -> {
+ 			try {
+ 				combineKey.append(blockContent.getTag()).append(blockContent.getHashTxnId());
+-
+-				// final List<String> hostForKey =
+-				// filterHostForKey(combineKey.toString());
+-				// confirmationMapValidityCount(combineKey.toString(),
+-				// hostForKey);
+ 				final GetStatusRequest tagTxn = new GetStatusRequest();
+ 				tagTxn.setTag(blockContent.getTag());
+ 				tagTxn.setTransactionId(blockContent.getHashTxnId());
+ 				listOfTxn.add(tagTxn);
+-
+-				// New Code to Send GetStatusRequest to other nodes.
+-
+-				/* Previous Code */
+-
+-				// final BlockStatus blockStatus =
+-				// blockService.getBlockStatus(blockContent.getTag(),
+-				// blockContent.getHashTxnId());
+-				// String status = "";
+-				// if (null != blockStatus) {
+-				// status = blockStatus.getStatus();
+-				// }
+-				// if (status != null &&
+-				// status.equals(BlockStatusEnum.BLOCK_TO_BE_CREATED.name())
+-				// && (hostForKey.size() + confirmationMapValidityCount) <
+-				// MIN_NODE_VALIDITY) {
+-				// // Update block status as DELETED, because it is not present
+-				// // at other nodes for MIN_NODE_VALIDITY.
+-				// blockService.updateDeleteStatus(blockContent.getTag(),
+-				// blockContent.getHashTxnId(),
+-				// BlockStatusEnum.DELETED.name());
+-				// } else if ((null != hostForKey && hostForKey.size() >=
+-				// MIN_NODE_VALIDITY)) {
+-				// if (localHashList.contains(combineKey.toString())) {
+-				// // Do Nothing, Means total minimum validity nodes
+-				// // having block including this local nodes.
+-				// logger.info(
+-				// "Total minimum validity nodes having block including this
+-				// local nodes for transaction id "
+-				// + blockContent.getHashTxnId());
+-				// } else if (null != blockStatus &&
+-				// blockStatus.equals(BlockStatusEnum.DELETED.name())) {
+-				// // Do Nothing, because this block has been
+-				// // deleted
+-				// // from this node.
+-				// logger.info("This block has been deleted from this node for
+-				// transaction id "
+-				// + blockContent.getHashTxnId());
+-				// } else {
+-				// /*
+-				// * If local/this node does not having this transaction
+-				// * id, block status is not equal to deleted and other
+-				// * minimum validating nodes having this transaction id,
+-				// * means other nodes have created the block but this
+-				// * node does not receive block data yet. So ask to any
+-				// * random node for block data.
+-				// */
+-				// receiveBlockForTxnIds.put(tagTxn, hostForKey);
+-				// logger.info("Block is to be get from other nodes for
+-				// transaction id "
+-				// + blockContent.getHashTxnId());
+-				// }
+-				//
+-				// } else if (localHashList.contains(combineKey.toString())
+-				// && (hostForKey.size() + confirmationMapValidityCount ==
+-				// MIN_NODE_VALIDITY)) {
+-				// /*
+-				// * Do Nothing, If local host contains key combineKey,
+-				// * another one node having block for this, and after that
+-				// * any one of remaining node having this key in their
+-				// * confirmation map, means this block is to be created on
+-				// * node having confirmation map, so do nothing.
+-				// */
+-				// logger.info(
+-				// "Local node and one other node having this block, one of
+-				// remaining nodes having value in comfirmation map as well, so
+-				// do nothing "
+-				// + blockContent.getHashTxnId());
+-				// } else {
+-				// deleteBlockForTxnIds.add(tagTxn);
+-				// logger.info("Delete this block from local node for
+-				// transaction id " + blockContent.getHashTxnId());
+-				// }
+-				// } catch (final Exception e) {
+-				// logger.error("Error while validating block to sync for
+-				// transaction id " + blockContent.getHashTxnId(),
+-				// e);
+-				// }
+-				// combineKey.setLength(0);
+ 			} catch (final Exception e) {
+ 				logger.error("Error while validating block to sync for transaction id " + blockContent.getHashTxnId(),
+ 						e);
+@@ -246,55 +145,12 @@
+ 		mapWithStatus.put(StringConstants.TXT_STATUS, listOfTxn);
+ 	}
+ 
+-	/**
+-	 * Filter all the host which contains the provided combineKey.
+-	 *
+-	 * @param combineKey
+-	 * @return List<String> of host.
+-	 */
+-	// private List<String> filterHostForKey(final String combineKey) {
+-	// final List<String> keyInNode = new ArrayList<>();
+-	// logger.info("List of host having key :: " + combineKey);
+-	// receivedSyncModelMap.forEach((key, value) -> {
+-	// if (null != value.getHashList() &&
+-	// value.getHashList().contains(combineKey)) {
+-	// keyInNode.add(key);
+-	// logger.info(key);
+-	// }
+-	// });
+-	// return keyInNode;
+-	// }
+-
+-	/**
+-	 * Get the number of count having value in their confirmation map.
+-	 *
+-	 * @param combineKey
+-	 * @return
+-	 */
+-	// private int confirmationMapValidityCount(final String combineKey, final
+-	// List<String> hostForKey) {
+-	// final AtomicInteger count = new AtomicInteger(0);
+-	// logger.info("Host having confirmation map value for key :: " +
+-	// combineKey);
+-	// receivedSyncModelMap.forEach((key, value) -> {
+-	// if (null != value.getConfirmationMap() && null !=
+-	// value.getConfirmationMap().get(combineKey)
+-	// && value.getConfirmationMap().get(combineKey).size() >= MIN_NODE_VALIDITY
+-	// && !hostForKey.contains(key)) {
+-	// count.getAndIncrement();
+-	// logger.info(key);
+-	// }
+-	// });
+-	// return count.get();
+-	// }
+-
+ 	private void sendTxnListToOtherNode() {
+ 		final ObjectMapper mapper = new ObjectMapper();
+-		// receiveBlockForTxnIds.forEach((model, hosts) -> {
+-		// final String host = hosts.get(new Random().nextInt(hosts.size()));
+ 		listOfHosts.forEach((host) -> {
+ 			try (final Socket socket = new Socket();) {
+-				logger.info("Sending MapOfTagTxnId: " + mapWithStatus + " To host: " + host);
++				// logger.info("Sending MapOfTagTxnId: " + mapWithStatus + " To
++				// host: " + host);
+ 				socket.setTcpNoDelay(true);
+ 				socket.connect(new InetSocketAddress(host, ConfigConstants.PORT_NO_TAGTXD_SEND), 1000 * 10);
+ 				final String valueAsString = mapper.writeValueAsString(mapWithStatus);
+@@ -306,17 +162,18 @@
+ 				logger.error("Problem while Sending listOftagTaxnId: " + mapWithStatus + " to host: " + host);
+ 			}
+ 		});
+-		// });
+ 	}
+ 
+ 	public void sendTxnListToOtherNode(final Map<String, List<GetStatusRequest>> mapToSend, final String clientip) {
+ 		final ObjectMapper mapper = new ObjectMapper();
+ 		try (final Socket socket = new Socket();) {
+-			logger.info("Sending MapToSend: " + mapToSend + " To host: " + clientip);
++			// logger.info("Sending MapToSend: " + mapToSend + " To host: " +
++			// clientip);
+ 			socket.setTcpNoDelay(true);
+ 			socket.connect(new InetSocketAddress(clientip, ConfigConstants.PORT_NO_TAGTXD_SEND), 1000 * 10);
+ 			final String valueAsString = mapper.writeValueAsString(mapToSend);
+-			logger.info("Sending value: " + valueAsString + " to Host: " + clientip);
++			// logger.info("Sending value: " + valueAsString + " to Host: " +
++			// clientip);
+ 			final PrintWriter printWriter = new PrintWriter(socket.getOutputStream());
+ 			printWriter.write(valueAsString);
+ 			printWriter.flush();
+@@ -325,14 +182,4 @@
+ 			logger.error("Problem while Sending listOftagTaxnId: " + mapWithStatus + " to host: " + clientip);
+ 		}
+ 	}
+-
+-	/**
+-	 * Call to delete blocks.
+-	 */
+-	private void deleteBlocks() {
+-		deleteBlockForTxnIds.forEach(tagTxn -> {
+-			logger.info("Block going to be deleted after sync for transaction id " + tagTxn.getTransactionId());
+-			blockService.removeBlock(tagTxn.getTag(), tagTxn.getTransactionId());
+-		});
+-	}
+ }
+\ No newline at end of file
+Index: src/main/java/com/pbc/job/TxnReceiverBlockSenderThread.java
+===================================================================
+--- src/main/java/com/pbc/job/TxnReceiverBlockSenderThread.java	(revision 456)
++++ src/main/java/com/pbc/job/TxnReceiverBlockSenderThread.java	(working copy)
+@@ -1,15 +1,16 @@
+ package com.pbc.job;
+ 
+ import java.io.BufferedReader;
++import java.io.DataInputStream;
++import java.io.DataOutputStream;
+ import java.io.File;
++import java.io.FileInputStream;
+ import java.io.IOException;
+ import java.io.InputStream;
+ import java.io.InputStreamReader;
+-import java.io.PrintWriter;
+ import java.net.InetSocketAddress;
+ import java.net.ServerSocket;
+ import java.net.Socket;
+-import java.nio.file.Files;
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+@@ -36,18 +37,16 @@
+ 
+ 	@Autowired
+ 	private BlockService blockService;
++
+ 	private final ObjectMapper mapper = new ObjectMapper();
+ 
+-	final GsonBuilder gsonBuilder = new GsonBuilder();
+-	final Gson gson = gsonBuilder.enableComplexMapKeySerialization().setPrettyPrinting().create();
+ 	private final Map<GetStatusRequest, String> mapForStatus = new HashMap<>();
++	Gson gson = new GsonBuilder().enableComplexMapKeySerialization().setPrettyPrinting().create();
+ 
+ 	@Override
+ 	public void run() {
+-
+ 		ServerSocket serverSocket = null;
+ 		try {
+-
+ 			serverSocket = new ServerSocket(ConfigConstants.PORT_NO_TAGTXD_SEND);
+ 			while (true) {
+ 				final Socket socket;
+@@ -69,11 +68,13 @@
+ 						final Map<String, List<GetStatusRequest>> mapWithStatus = mapper.readValue(builder.toString(),
+ 								new TypeReference<Map<String, List<GetStatusRequest>>>() {
+ 								});
+-						logger.info("Builder data :: " + builder.toString());
++						// logger.info("Builder data :: " + builder.toString());
+ 						builder.setLength(0);
+ 						final String host = socket.getInetAddress().getHostAddress().toString();
+-						logger.info(
+-								"ListOfTagTxnId Received: " + gson.toJson(mapWithStatus) + " from the Host: " + host);
++						// logger.info(
++						// "ListOfTagTxnId Received: " +
++						// gson.toJson(mapWithStatus) + " from the Host: " +
++						// host);
+ 						mapWithStatus.forEach((statusOfList, getStatusRequest) -> {
+ 							if (statusOfList.equals(StringConstants.TXT_STATUS)) {
+ 								logger.info("Map was for getting Status, So now procceding.");
+@@ -94,6 +95,7 @@
+ 									logger.info("Getting block from blockchain for " + getStatus.toString());
+ 									final Block block = blockService
+ 											.getBlock(getStatus.getTag() + getStatus.getTransactionId());
++									logger.info("SEnding block: " + block.toString() + " to host: " + host);
+ 									// Returning the Block And File to node.
+ 									sendBlockDataToHost(block, host);
+ 								});
+@@ -100,7 +102,6 @@
+ 							}
+ 						});
+ 						mapWithStatus.clear();
+-						// mapForStatus.clear();
+ 					} catch (final Exception e) {
+ 						e.printStackTrace();
+ 					} finally {
+@@ -121,48 +122,76 @@
+ 
+ 	private void sendBlockDataToHost(final Block block, final String clientIp) {
+ 		try (final Socket socket = new Socket();) {
+-			logger.info("Send block data to host " + clientIp);
+-			logger.info("Sending block data " + block.toString());
++			// logger.info("Send block data to host " + clientIp + " Block data
++			// " + block.toString());
+ 			socket.setTcpNoDelay(true);
++			logger.info("Sending data to: " + clientIp + " : " + ConfigConstants.PORT_NO_BLOCK_RECEIVE);
+ 			socket.connect(new InetSocketAddress(clientIp, ConfigConstants.PORT_NO_BLOCK_RECEIVE), 1000 * 10);
+-
+-			final File file = new File(block.getBlockContent().getFilePath());
+-			final byte[] readAllBytes = Files.readAllBytes(file.toPath());
+-
++			final DataOutputStream dataOut = new DataOutputStream(socket.getOutputStream());
++			// final File file = new
++			// File(block.getBlockContent().getFilePath());
++			// final byte[] readAllBytes = Files.readAllBytes(file.toPath());
++			//
++			// final SyncBlockDataModel model = new SyncBlockDataModel();
++			// model.setBlock(block);
++			// model.setFile(readAllBytes);
++			// final ObjectOutputStream oos = new
++			// ObjectOutputStream(socket.getOutputStream());
++			// oos.writeObject(model);
++			// Arrays.fill(readAllBytes, (byte) 0);
++			// oos.close();
++			// logger.info("Block data sent to host " + clientIp);
++			// } catch (final Exception e) {
++			// logger.error("Error occurred in sending block data for
++			// transaction id "
++			// + block.getBlockContent().getHashTxnId() + "\nTo host " +
++			// clientIp, e);
++			// }
+ 			final SyncBlockDataModel model = new SyncBlockDataModel();
+ 			model.setBlock(block);
+-			model.setFile(readAllBytes);
++			final File file = new File(block.getBlockContent().getFilePath());
+ 
+-			// final String valueAsString = mapper.writeValueAsString(model);
+-			final String valueAsString = gson.toJson(model);
+-			final PrintWriter printWriter = new PrintWriter(socket.getOutputStream());
+-			printWriter.write(valueAsString);
+-			printWriter.flush();
+-			printWriter.close();
+-			logger.info("Block data sent to host " + clientIp);
+-			logger.info("Block data " + block.toString());
++			final DataInputStream dataIn = new DataInputStream(new FileInputStream(file));
+ 
++			final String json = gson.toJson(model);
++			dataOut.writeUTF(json);
++			dataOut.flush();
++			final byte[] buffer = new byte[8 * 1024];
++			int temp;
++			while ((temp = dataIn.read(buffer)) > 0) {
++				dataOut.write(buffer, 0, temp);
++			}
++			dataOut.flush();
++			dataIn.close();
++			dataOut.close();
+ 		} catch (final Exception e) {
+-			logger.error("Error occurred in sending block data for transaction id "
+-					+ block.getBlockContent().getHashTxnId() + "\nTo host " + clientIp, e);
++			logger.error("Problem in sending data to: " + clientIp);
++		} finally {
++
+ 		}
+ 	}
+ 
+ 	private void sendBlockDataToHost(final Map<GetStatusRequest, String> mapWithTxnStatus, final String clientIp) {
+ 		try (final Socket socket = new Socket();) {
+-			logger.info("Sending data: " + mapWithTxnStatus + " To: " + clientIp);
+-
++			// logger.info("Sending data: " + mapWithTxnStatus + " To: " +
++			// clientIp);
+ 			socket.setTcpNoDelay(true);
+ 			socket.connect(new InetSocketAddress(clientIp, ConfigConstants.PORT_NO_BLOCK_RECEIVE), 1000 * 10);
++			// final SyncBlockDataModel dataModel = new SyncBlockDataModel();
++			// dataModel.setMapWithStatus(mapWithTxnStatus);
++			// final ObjectOutputStream oos = new
++			// ObjectOutputStream(socket.getOutputStream());
++			// oos.writeObject(dataModel);
++			// oos.close();
+ 			final SyncBlockDataModel dataModel = new SyncBlockDataModel();
+ 			dataModel.setMapWithStatus(mapWithTxnStatus);
+-			final String mapAsString = gson.toJson(dataModel);
+-			logger.info("Value as Json to be Send: " + mapAsString);
+-			final PrintWriter printWriter = new PrintWriter(socket.getOutputStream());
+-			printWriter.write(mapAsString);
+-			printWriter.flush();
+-			printWriter.close();
+-			logger.info("Map Sent : " + mapWithTxnStatus + " To :" + clientIp);
++			final String json = gson.toJson(dataModel);
++			final DataOutputStream dataOut = new DataOutputStream(socket.getOutputStream());
++			dataOut.writeUTF(json);
++			dataOut.flush();
++			dataOut.close();
++			// logger.info("Map Sent : " + mapWithTxnStatus + " To :" +
++			// clientIp);
+ 		} catch (final Exception e) {
+ 			logger.error("Error occurred in sending the data: " + mapWithTxnStatus + " To: " + clientIp);
+ 		}
+Index: src/main/java/com/pbc/models/CompleteRequest.java
+===================================================================
+--- src/main/java/com/pbc/models/CompleteRequest.java	(revision 456)
++++ src/main/java/com/pbc/models/CompleteRequest.java	(working copy)
+@@ -18,7 +18,6 @@
+ 	@NotNull(message = ValidationConstraints.EMPTY_TRANSACTION_ID_ERR)
+ 	private String transactionId;
+ 
+-	// @NotNull(message=ValidationConstraints.EMPTY_DETAILED_MSG_ERR)
+ 	private String tag;
+ 
+ 	public CompleteRequest() {
+Index: src/main/java/com/pbc/models/CustomResponse.java
+===================================================================
+--- src/main/java/com/pbc/models/CustomResponse.java	(revision 456)
++++ src/main/java/com/pbc/models/CustomResponse.java	(working copy)
+@@ -4,6 +4,9 @@
+ 
+ import javax.xml.bind.annotation.XmlRootElement;
+ 
++import com.fasterxml.jackson.core.JsonProcessingException;
++import com.fasterxml.jackson.databind.ObjectMapper;
++
+ @XmlRootElement
+ public class CustomResponse<T> implements Serializable {
+ 
+@@ -45,6 +48,10 @@
+ 
+ 	@Override
+ 	public String toString() {
+-		return "CustomResponse [status=" + status + ", message=" + message + "]";
++		try {
++			return new ObjectMapper().writeValueAsString(this);
++		} catch (final JsonProcessingException e) {
++			return "Running server maintanance...";
++		}
+ 	}
+ }
+\ No newline at end of file
+Index: src/main/java/com/pbc/models/StatisticsModel.java
+===================================================================
+--- src/main/java/com/pbc/models/StatisticsModel.java	(revision 0)
++++ src/main/java/com/pbc/models/StatisticsModel.java	(working copy)
+@@ -0,0 +1,53 @@
++package com.pbc.models;
++
++import java.io.Serializable;
++import java.util.List;
++
++import com.pbc.repository.model.BlockStatus;
++
++public class StatisticsModel implements Serializable {
++
++	private static final long serialVersionUID = 520336949963669339L;
++
++	private long totalBlocks;
++	private long savedCount;
++	private long deletedCount;
++	private List<BlockStatus> blocks;
++
++	public long getTotalBlocks() {
++		return totalBlocks;
++	}
++
++	public StatisticsModel setTotalBlocks(final long totalBlocks) {
++		this.totalBlocks = totalBlocks;
++		return this;
++	}
++
++	public long getSavedCount() {
++		return savedCount;
++	}
++
++	public StatisticsModel setSavedCount(final long savedCount) {
++		this.savedCount = savedCount;
++		return this;
++	}
++
++	public long getDeletedCount() {
++		return deletedCount;
++	}
++
++	public StatisticsModel setDeletedCount(final long deletedCount) {
++		this.deletedCount = deletedCount;
++		return this;
++	}
++
++	public List<BlockStatus> getBlocks() {
++		return blocks;
++	}
++
++	public StatisticsModel setBlocks(final List<BlockStatus> blocks) {
++		this.blocks = blocks;
++		return this;
++	}
++
++}
+Index: src/main/java/com/pbc/notification/NotificationReceiver.java
+===================================================================
+--- src/main/java/com/pbc/notification/NotificationReceiver.java	(revision 456)
++++ src/main/java/com/pbc/notification/NotificationReceiver.java	(working copy)
+@@ -31,6 +31,7 @@
+ import com.pbc.threads.DeleteBlockRunnableTask;
+ import com.pbc.threads.SaveBlockRunnableTask;
+ import com.pbc.threads.ThreadPoolUtility;
++import com.pbc.utility.GetSystemIp;
+ import com.pbc.utility.IOFileUtil;
+ import com.pbc.utility.JSONObjectEnum;
+ import com.pbc.utility.StringConstants;
+@@ -51,8 +52,8 @@
+ 
+ 	/**
+ 	 * This block DTO cache will hold DTO cache objects. Whenever the CRC
+-	 * verification and confirmation is done it will be used to receive the
+-	 * block info to be saved in Block chain.
++	 * verification and confirmation is done it will be used to receive the block
++	 * info to be saved in Block chain.
+ 	 */
+ 	private static final Map<String, ParseableBlockDTO> blockDTOCache = new ConcurrentHashMap<>();
+ 
+@@ -77,8 +78,7 @@
+ 	}
+ 
+ 	/**
+-	 * Start a thread to listen a socket continuously for a provided port
+-	 * number.
++	 * Start a thread to listen a socket continuously for a provided port number.
+ 	 *
+ 	 * @param portNumber
+ 	 */
+@@ -108,7 +108,6 @@
+ 				}
+ 				logger.info(
+ 						"Socket Received with IP::" + (currentHost = receivedSocket.getInetAddress().getHostAddress()));
+-				reportLogger.fatal("CRC received from node :: " + receivedSocket.getInetAddress().getHostAddress());
+ 				final Runnable listenerThread = () -> {
+ 					try (InputStream inputStream = receivedSocket.getInputStream();
+ 							BufferedReader receivedBuffer = new BufferedReader(new InputStreamReader(inputStream));) {
+@@ -123,10 +122,6 @@
+ 							postProcessingDeleteNotification(sb, new String(currentHost));
+ 						}
+ 						sb.setLength(0);
+-						// add host to the list of other hosts in node network
+-						// if it does not exists already.
+-						addHostInList(receivedSocket);
+-
+ 					} catch (final Exception e) {
+ 						logger.error("Problem while receiving : " + e.getMessage());
+ 					} finally {
+@@ -153,11 +148,10 @@
+ 			final List<ConfirmationHelper> confirmationList = getTransactionMessageService().getConfirmationMap()
+ 					.get(combinedKey);
+ 			if (notificationObject.getNotificationType().equals(JSONObjectEnum.VALIDITY)) {
+-
+-				if (!currentHost.equals(StringConstants.LOCAL_HOST)) {
++				reportLogger.fatal("To SAVE block  VALIDITY received from node :: " + currentHost);
++				if (!currentHost.equals(GetSystemIp.getSystemLocalIp())) {
+ 					getTransactionMessageService().putConfirmationValue(combinedKey, notificationObject.isValid());
+ 				}
+-
+ 				ParseableBlockDTO blockDTO = blockDTOCache.get(combinedKey);
+ 				int helperListSize = 0;
+ 				if (confirmationList != null) {
+@@ -190,24 +184,26 @@
+ 				clearMaps(notificationObject.getTag(), notificationObject.getTransactionId(), crcList,
+ 						confirmationList);
+ 			} else {
++				reportLogger.fatal("To SAVE block CRC received from node :: " + currentHost);
+ 				// Put CRC values to crcMap if it is not from LocalHost.
+-				if (!currentHost.equals(StringConstants.LOCAL_HOST)) {
++				if (!currentHost.equals(GetSystemIp.getSystemLocalIp())) {
+ 					logger.info("crcList before putting value into crcMap :: " + crcList);
+ 					getTransactionMessageService().putCRCValue(combinedKey, notificationObject.getCrc());
+ 					crcList = TransactionMessageService.getCrcMap().get(combinedKey);
+ 					logger.info("crcList after putting value into crcMap :: " + crcList);
+-					logger.info("Message received was a crc broadcast."
+-							+ "Putting it to map of transaction service for combined Key: " + combinedKey);
++					logger.info(
++							"Message received was a crc broadcast. Putting it to map of transaction service for combined Key: "
++									+ combinedKey);
+ 				} else {
+-					logger.info("Message received was a crc broadcast, "
+-							+ "but not putting it to map because of localhost for combined Key: " + combinedKey);
++					logger.info(
++							"Message received was a crc broadcast, but not putting it to map because of localhost for combined Key: "
++									+ combinedKey);
+ 				}
+-
+ 				if (!clearMaps(notificationObject.getTag(), notificationObject.getTransactionId(), crcList,
+ 						confirmationList)) {
+ 					logger.info(
+ 							"clear map is false  " + notificationObject.getTag() + notificationObject.getTransactionId()
+-									+ "::crcList=" + crcList + "::confirmationList::" + confirmationList);
++									+ " ::crcList=" + crcList + " ::confirmationList:: " + confirmationList);
+ 					getTransactionMessageService().verifyAndBroadCast(false, notificationObject);
+ 				}
+ 			}
+@@ -218,9 +214,6 @@
+ 
+ 	public void saveBlock(final ParseableBlockDTO blockDTO, final String combinedKey) {
+ 		final ExecutorService executorService = ThreadPoolUtility.getThreadPool();
+-
+-		// logger.info("saveBlockRunnableTask: " + saveBlockRunnableTask +
+-		// "--------" + combinedKey);
+ 		executorService.submit(new SaveBlockRunnableTask(blockService).setParseableBlockDTO(blockDTO));
+ 		logger.info("Block created and saved with combined Key: " + combinedKey);
+ 
+@@ -236,8 +229,8 @@
+ 				&& confirmationList.size() >= TOTAL_NODES
+ 				&& (confirmationList.get(0).isAlreadyProcessed() || !isBlockProcessable(confirmationList))) {
+ 			confirmationList.get(0).setAlreadyProcessed(true);
+-			logger.info("combinedKey::" + combinedKey + " inside clear Maps with values crcs:" + crcList
+-					+ "::with confirmation:" + confirmationList);
++			logger.info("combinedKey:: " + combinedKey + " inside clear Maps with values crcs: " + crcList
++					+ " ::with confirmations: " + confirmationList);
+ 			blockDTOCache.remove(combinedKey);
+ 			getTransactionMessageService().removeDataWithKey(combinedKey);
+ 			logger.info("Removing data from crc map and confirmation map for combined key: " + combinedKey);
+@@ -255,7 +248,8 @@
+ 					.get(deleteComfirmationKey);
+ 			List<String> crcList = TransactionMessageService.getCrcMap().get(deleteComfirmationKey);
+ 			if (notificationObject.getNotificationType().equals(JSONObjectEnum.VALIDITY)) {
+-				if (!currentHost.equals(StringConstants.LOCAL_HOST)) {
++				reportLogger.fatal("To DELETE block VALIDITY received from node :: " + currentHost);
++				if (!currentHost.equals(GetSystemIp.getSystemLocalIp())) {
+ 					getTransactionMessageService().putConfirmationValue(deleteComfirmationKey,
+ 							notificationObject.isDelete());
+ 				}
+@@ -266,10 +260,9 @@
+ 				}
+ 				final boolean isToBeDeleted = helperListSize >= MIN_NODE_VALIDITY
+ 						&& isBlockProcessable(confirmationList);
+-
+ 				logger.info("Value of isToBeDeleleted " + isToBeDeleted);
+ 				if (isToBeDeleted) {
+-					// save the block as we have got confirmation from three
++					// Save the block as we have got confirmation from three
+ 					// nodes.
+ 					confirmationList.get(0).setAlreadyProcessed(true);
+ 					final ExecutorService executorService = ThreadPoolUtility.getThreadPool();
+@@ -286,18 +279,19 @@
+ 						confirmationList);
+ 
+ 			} else {
++				reportLogger.fatal("To DELETE block CRC received from node :: " + currentHost);
+ 				// Put CRC values to crcMap if it is not from LocalHost.
+-				if (!currentHost.equals(StringConstants.LOCAL_HOST)) {
++				if (!currentHost.equals(GetSystemIp.getSystemLocalIp())) {
+ 					logger.info("crcList before putting value into crcMap :: " + crcList);
+ 					getTransactionMessageService().putCRCValue(deleteComfirmationKey, notificationObject.getCrc());
+ 					crcList = TransactionMessageService.getCrcMap().get(deleteComfirmationKey);
+-					logger.info("crcList after putting value into crcMap :: " + crcList);
+-					logger.info("Message received was a crc broadcast."
+-							+ "Putting it to map of transaction service for combined Key: " + deleteComfirmationKey);
++					logger.info(
++							"Message received was a crc broadcast Putting it to map of transaction service for combined Key: "
++									+ deleteComfirmationKey);
+ 				} else {
+-					logger.info("Message received was a crc broadcast, "
+-							+ "but not putting it to map because of localhost for combined Key: "
+-							+ deleteComfirmationKey);
++					logger.info(
++							"Message received was a crc broadcast, but not putting it to map because of localhost for combined Key: "
++									+ deleteComfirmationKey);
+ 				}
+ 				if (!clearMaps(notificationObject.getTag(), notificationObject.getTransactionId(), crcList,
+ 						confirmationList)) {
+@@ -337,8 +331,8 @@
+ 	}
+ 
+ 	/**
+-	 * Check availability of some port before connection. This method will be
+-	 * needed only if server socket is not set to be reusable using
++	 * Check availability of some port before connection. This method will be needed
++	 * only if server socket is not set to be reusable using
+ 	 * <code>setReuseAddress(true)</code>>.
+ 	 *
+ 	 * @param serverPortNumber
+@@ -345,15 +339,10 @@
+ 	 * @return
+ 	 */
+ 	private boolean available(final int serverPortNumber) {
+-		try (Socket ignored = new Socket(StringConstants.LOCAL_HOST, serverPortNumber)) {
++		try (Socket ignored = new Socket(GetSystemIp.getSystemLocalIp(), serverPortNumber)) {
+ 			return false;
+ 		} catch (final IOException ignored) {
+ 			return true;
+ 		}
+ 	}
+-
+-	private void addHostInList(final Socket receivedSocket) {
+-		final String currentSocketAddress = receivedSocket.getInetAddress().getHostAddress();
+-		new NotificationSender().addHostInList(currentSocketAddress);
+-	}
+ }
+\ No newline at end of file
+Index: src/main/java/com/pbc/notification/NotificationSender.java
+===================================================================
+--- src/main/java/com/pbc/notification/NotificationSender.java	(revision 456)
++++ src/main/java/com/pbc/notification/NotificationSender.java	(working copy)
+@@ -14,14 +14,18 @@
+ import java.util.stream.Collectors;
+ 
+ import org.apache.log4j.Logger;
++import org.springframework.context.annotation.Scope;
++import org.springframework.stereotype.Service;
+ 
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import com.pbc.models.CompleteRequest;
+ import com.pbc.models.NotificationObject;
+ import com.pbc.utility.ConfigConstants;
++import com.pbc.utility.GetSystemIp;
+ import com.pbc.utility.JSONObjectEnum;
+-import com.pbc.utility.StringConstants;
+ 
++@Service(value = "notificationSender")
++@Scope("prototype")
+ public class NotificationSender {
+ 
+ 	private static final Logger logger = Logger.getLogger(NotificationSender.class);
+@@ -38,7 +42,7 @@
+ 	}
+ 
+ 	public void addHostInList(final String newNode) {
+-		if (!listOfHosts.contains(newNode) && !newNode.equals(StringConstants.LOCAL_HOST)) {
++		if (!listOfHosts.contains(newNode) && !newNode.equals(GetSystemIp.getSystemLocalIp())) {
+ 			listOfHosts.add(newNode);
+ 		}
+ 	}
+Index: src/main/java/com/pbc/push_notification/ApplicationMessageNotify.java
+===================================================================
+--- src/main/java/com/pbc/push_notification/ApplicationMessageNotify.java	(revision 456)
++++ src/main/java/com/pbc/push_notification/ApplicationMessageNotify.java	(working copy)
+@@ -12,10 +12,6 @@
+ 	private static final Logger logger = Logger.getLogger(ApplicationMessageNotify.class);
+ 	private static final Logger reportLogger = Logger.getLogger("reportsLogger");
+ 
+-	// public ApplicationMessageNotify() {
+-	// // Default Constructor
+-	// }
+-
+ 	@Override
+ 	public boolean validate(final String appId) {
+ 		if (appId != null) {
+Index: src/main/java/com/pbc/push_notification/PushNotificationSender.java
+===================================================================
+--- src/main/java/com/pbc/push_notification/PushNotificationSender.java	(revision 456)
++++ src/main/java/com/pbc/push_notification/PushNotificationSender.java	(working copy)
+@@ -19,7 +19,7 @@
+ import com.fasterxml.jackson.databind.ObjectMapper;
+ import com.pbc.models.GetStatusRequest;
+ import com.pbc.utility.ConfigConstants;
+-import com.pbc.utility.StringConstants;
++import com.pbc.utility.GetSystemIp;
+ 
+ @Service
+ public class PushNotificationSender {
+@@ -43,7 +43,7 @@
+ 	}
+ 
+ 	public void addHostInList(final String newNode) {
+-		if (!listOfHosts.contains(newNode) && !newNode.equals(StringConstants.LOCAL_HOST)) {
++		if (!listOfHosts.contains(newNode) && !newNode.equals(GetSystemIp.getSystemLocalIp())) {
+ 			listOfHosts.add(newNode);
+ 		}
+ 	}
+@@ -55,9 +55,8 @@
+ 	}
+ 
+ 	/**
+-	 * Send data to all host listed in {@link #listOfHosts}. Don't forget to
+-	 * call {@link #setInitialSyncData(String)} to set data before calling this
+-	 * method.
++	 * Send data to all host listed in {@link #listOfHosts}. Don't forget to call
++	 * {@link #setInitialSyncData(String)} to set data before calling this method.
+ 	 */
+ 	public void sendPbcSyncNotification() {
+ 		logger.info(
+Index: src/main/java/com/pbc/push_notification/service/PNService.java
+===================================================================
+--- src/main/java/com/pbc/push_notification/service/PNService.java	(revision 456)
++++ src/main/java/com/pbc/push_notification/service/PNService.java	(working copy)
+@@ -10,6 +10,7 @@
+ 
+ import com.pbc.blockchain.Block;
+ import com.pbc.blockchain.BlockContent;
++import com.pbc.blockchain.creation.Persistor;
+ import com.pbc.push_notification.PushNotification;
+ import com.pbc.push_notification.models.PushNotificationDTO;
+ 
+@@ -17,6 +18,8 @@
+ public class PNService {
+ 
+ 	private static final Logger logger = Logger.getLogger(PNService.class);
++	@Autowired
++	private Persistor<Block> jsonPersistor;
+ 
+ 	@Autowired
+ 	private List<PushNotification> pushNotification;
+@@ -43,21 +46,21 @@
+ 					return;
+ 				}
+ 				logger.info("BlockContent retrived from Block is: " + blockContent);
+-				// if (blockContent.getTag().equals(TAG_SECURE_MESSAGE)) {
+-				processNotify(blockContent);
+-				// } else {
+-				// if (map.get(blockContent.getHashTxnId()) == null) {
+-				// // Nothing present in this map for this transaction id,
+-				// // now putting count 1.
+-				// map.put(blockContent.getHashTxnId(), 1);
+-				// } else {
+-				// final Block blockForSessionKey = jsonPersistor
+-				// .getBlock(TAG_A2A_SESSIONKEY + blockContent.getHashTxnId());
+-				//
+-				// processNotify(blockForSessionKey.getBlockContent());
+-				// map.remove(blockContent.getHashTxnId());
+-				// }
+-				// }
++				if (blockContent.getTag().equals(TAG_SECURE_MESSAGE)) {
++					processNotify(blockContent);
++				} else {
++					if (map.get(blockContent.getHashTxnId()) == null) {
++						// Nothing present in this map for this transaction id,
++						// now putting count 1.
++						map.put(blockContent.getHashTxnId(), 1);
++					} else {
++						final Block blockForSessionKey = jsonPersistor
++								.getBlock(TAG_A2A_SESSIONKEY + blockContent.getHashTxnId());
++
++						processNotify(blockForSessionKey.getBlockContent());
++						map.remove(blockContent.getHashTxnId());
++					}
++				}
+ 			} catch (final Exception e) {
+ 				logger.error("Problem in sending Push Notification " + e.getMessage());
+ 			}
+Index: src/main/java/com/pbc/repository/BlockStatusDao.java
+===================================================================
+--- src/main/java/com/pbc/repository/BlockStatusDao.java	(revision 456)
++++ src/main/java/com/pbc/repository/BlockStatusDao.java	(working copy)
+@@ -16,14 +16,16 @@
+ 
+ 	List<BlockStatus> getBlockList(List<String> list);
+ 
+-	int getTotalBlock();
++	long getTotalBlockCount();
+ 
+-	int getAvailableBlock();
++	long getAvailableBlockCount();
+ 
++	long getDeletedBlockCount();
++
+ 	List<BlockStatus> getBlockToBeCreatedList();
+ 
+ 	BlockStatus getStatusifSaved(String tag, String transactionId);
+-	
++
+ 	List<BlockStatus> getBlockStatusListByPage(final int pageNo);
+-	
++
+ }
+\ No newline at end of file
+Index: src/main/java/com/pbc/repository/impl/BlockStatusDaoImpl.java
+===================================================================
+--- src/main/java/com/pbc/repository/impl/BlockStatusDaoImpl.java	(revision 456)
++++ src/main/java/com/pbc/repository/impl/BlockStatusDaoImpl.java	(working copy)
+@@ -138,22 +138,26 @@
+ 	}
+ 
+ 	@Override
+-	public int getTotalBlock() {
++	public long getTotalBlockCount() {
+ 		final String query = "select count(*) from block_status;";
+-		final Integer execute = namedParameterJdbcTemplate.queryForObject(query, new MapSqlParameterSource(),
+-				Integer.class);
+-		return execute.intValue();
++		return namedParameterJdbcTemplate.queryForObject(query, new MapSqlParameterSource(), Long.class).longValue();
+ 	}
+ 
+ 	@Override
+-	public int getAvailableBlock() {
++	public long getAvailableBlockCount() {
+ 		final MapSqlParameterSource source = new MapSqlParameterSource();
+ 		source.addValue("SAVED", BlockStatusEnum.SAVED.name());
+ 		source.addValue("BLOCK_DELETE_IN_PROCESS", BlockStatusEnum.BLOCK_DELETE_IN_PROCESS.name());
+ 		final String query = "select count(*) from block_status where (status= :SAVED  OR status= :BLOCK_DELETE_IN_PROCESS)";
++		return namedParameterJdbcTemplate.queryForObject(query, source, Long.class).longValue();
++	}
+ 
+-		final Integer execute = namedParameterJdbcTemplate.queryForObject(query, source, Integer.class);
+-		return execute.intValue();
++	@Override
++	public long getDeletedBlockCount() {
++		final MapSqlParameterSource source = new MapSqlParameterSource();
++		source.addValue("DELETED", BlockStatusEnum.DELETED.name());
++		final String query = "select count(*) from block_status where (status= :DELETED)";
++		return namedParameterJdbcTemplate.queryForObject(query, source, Long.class).longValue();
+ 	}
+ 
+ 	@Override
+@@ -184,12 +188,11 @@
+ 
+ 	@Override
+ 	public List<BlockStatus> getBlockStatusListByPage(final int pageNo) {
+-		// select * from block_status order by createdAt limit 2,4;
+ 		if (pageNo <= 0) {
+ 			return null;
+ 		}
+-		final String query = "select * from " + TABLE_BLOCK_STATUS + " order by createdAt limit " + (pageNo - 1) * 100
+-				+ ", 100;";
++		final String query = "select * from " + TABLE_BLOCK_STATUS + " order by createdAt desc limit "
++				+ (pageNo - 1) * 100 + ", 100;";
+ 		return namedParameterJdbcTemplate.query(query, new BlockStatusRowMapper());
+ 	}
+ 
+Index: src/main/java/com/pbc/repository/model/BlockStatus.java
+===================================================================
+--- src/main/java/com/pbc/repository/model/BlockStatus.java	(revision 456)
++++ src/main/java/com/pbc/repository/model/BlockStatus.java	(working copy)
+@@ -5,7 +5,7 @@
+ 
+ public class BlockStatus implements Serializable {
+ 
+-	private static final long serialVersionUID = 1L;
++	private static final long serialVersionUID = -2459431092416280876L;
+ 
+ 	private String transactionId;
+ 	private String tag;
+Index: src/main/java/com/pbc/restcontroller/BlockController.java
+===================================================================
+--- src/main/java/com/pbc/restcontroller/BlockController.java	(revision 456)
++++ src/main/java/com/pbc/restcontroller/BlockController.java	(working copy)
+@@ -12,10 +12,7 @@
+ import static com.pbc.utility.CustomMessageConstants.STR_IS;
+ import static com.pbc.utility.CustomMessageConstants.STR_STATUS_MESSAGE;
+ 
+-import java.io.ByteArrayInputStream;
+-import java.util.HashMap;
+ import java.util.List;
+-import java.util.Map;
+ import java.util.stream.Collectors;
+ 
+ import javax.validation.constraints.NotNull;
+@@ -45,6 +42,7 @@
+ import com.pbc.models.GetMessageRequest;
+ import com.pbc.models.GetStatusRequest;
+ import com.pbc.models.ReceiverAddresses;
++import com.pbc.models.StatisticsModel;
+ import com.pbc.repository.model.BlockStatus;
+ import com.pbc.service.BlockService;
+ import com.pbc.service.TransactionMessageService;
+@@ -54,7 +52,6 @@
+ @Controller
+ @RequestMapping("/")
+ public class BlockController {
+-
+ 	// URL constants
+ 	private static final String SEND_MESSAGE_URL = "/sendMessage";
+ 	private static final String BLOCK_STATUS_URL = "/block/messageStatus";
+@@ -97,11 +94,10 @@
+ 			parseableBlockDTO.setTransactionId(transactionId).setCrc(crc).setReceiver(receiver).setSender(sender)
+ 					.setTag(tag).setPbcId(pbcId).setAppId(appId).setTimeStamp(Long.parseLong(timestamp))
+ 					.setSessionKey(sessionKey).setWebServerKey(webServerKey);
+-			logger.info("Complete Request data:: " + parseableBlockDTO.toString());
+-			logger.info("Combined key for request data is : " + tag + transactionId);
++			logger.info("Complete Request data:: " + parseableBlockDTO.toString() + " for " + tag + transactionId);
+ 
+ 			final boolean isValidMessage = transactionFactory.getObject().parseRequestAndValidate(parseableBlockDTO,
+-					new ByteArrayInputStream(file.getBytes()));
++					file.getInputStream());
+ 			if (!isValidMessage) {
+ 				logger.warn(
+ 						"CRC sent does not match with calculated crc it's not gonna process it further for combinedKey: "
+@@ -119,6 +115,7 @@
+ 				return customResponse;
+ 			} else {
+ 				logger.warn("Transaction id already exist : " + transactionId);
++				reportLogger.fatal("Request already exists for transaction id : " + transactionId);
+ 				customResponse = new CustomErrorResponse<>();
+ 				customResponse.setMessage(CustomMessageConstants.TXN_ALREADY_EXIST + " :: " + transactionId);
+ 				return customResponse;
+@@ -143,7 +140,6 @@
+ 	@ResponseBody
+ 	@RequestMapping(value = BLOCK_STATUS_URL, method = RequestMethod.POST, consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+ 	public CustomResponse<String> getBlockStatus(@RequestBody @NotNull @Validated final GetStatusRequest request) {
+-
+ 		logger.info(
+ 				"Block status get request received for combined key: " + request.getTag() + request.getTransactionId());
+ 		CustomResponse<String> response = null;
+@@ -153,11 +149,23 @@
+ 			response.setMessage(CustomMessageConstants.NO_MESSAGE);
+ 			return response;
+ 		}
++
+ 		final String status = blockStatus.getStatus();
+ 		response = new CustomSuccessResponse<>();
+-		response.setMessage(STR_STATUS_MESSAGE + StringConstants.SPACE + request.getTransactionId()
+-				+ StringConstants.SPACE + STR_IS + StringConstants.SPACE + status);
++
++		final StringBuilder stringBuilder = new StringBuilder();
++		stringBuilder.append(STR_STATUS_MESSAGE);
++		stringBuilder.append(StringConstants.SPACE);
++		stringBuilder.append(request.getTransactionId());
++		stringBuilder.append(StringConstants.SPACE);
++		stringBuilder.append(STR_IS);
++		stringBuilder.append(StringConstants.SPACE);
++		stringBuilder.append(status);
++
++		response.setMessage(stringBuilder.toString());
+ 		((CustomSuccessResponse<String>) response).setResultSet(status);
++		logger.info(stringBuilder.toString() + " GetMessage by txnid " + blockStatus.getTag()
++				+ blockStatus.getTransactionId());
+ 		return response;
+ 	}
+ 
+@@ -170,20 +178,27 @@
+ 	@ResponseBody
+ 	@RequestMapping(value = GET_MESSAGE_URL, method = RequestMethod.POST, consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+ 	public Object recieveBlockData(@RequestBody @NotNull @Validated final GetMessageRequest getMessageRequest) {
+-		logger.info("Get message request for combined Key: " + getMessageRequest.getTag()
+-				+ getMessageRequest.getTransactionId());
+-		final Block block = blockService.getBlock(getMessageRequest.getTag() + getMessageRequest.getTransactionId());
++		CustomResponse<BlockResponseDTO> response = null;
++		final String combineKey = getMessageRequest.getTag() + getMessageRequest.getTransactionId();
++		logger.info("Get message request for combined Key: " + combineKey);
++		reportLogger.fatal("Get message requested for transaction id : " + getMessageRequest.getTransactionId());
++		final Block block = blockService.getBlock(combineKey);
+ 		if (block == null) {
+-			final CustomResponse<BlockResponseDTO> customResponse = new CustomErrorResponse<>();
+-			customResponse.setMessage(NO_MESSAGE_FOR_TXNID);
+-			return customResponse;
++			reportLogger.fatal(NO_MESSAGE_FOR_TXNID + getMessageRequest.getTransactionId());
++			response = new CustomErrorResponse<>();
++			response.setMessage(NO_MESSAGE_FOR_TXNID);
++			return response;
+ 		}
+ 		final BlockResponseDTO blockResponseDTO = blockService.getBlockResponseDTO(block);
+ 		blockService.createDownloadUrl(blockResponseDTO, block);
+-		final CustomSuccessResponse<BlockResponseDTO> customSuccessResponse = new CustomSuccessResponse<>();
+-		customSuccessResponse.setMessage(MSG_BLOCK_RETURN_SUCCESSFULLY);
+-		customSuccessResponse.setResultSet(blockResponseDTO);
+-		return customSuccessResponse;
++		response = new CustomSuccessResponse<>();
++		response.setMessage(MSG_BLOCK_RETURN_SUCCESSFULLY);
++		((CustomSuccessResponse<BlockResponseDTO>) response).setResultSet(blockResponseDTO);
++		logger.info(MSG_BLOCK_RETURN_SUCCESSFULLY + " for transaction id " + combineKey + " Block data "
++				+ block.toString());
++		reportLogger
++				.fatal(MSG_BLOCK_RETURN_SUCCESSFULLY + " for transaction id " + getMessageRequest.getTransactionId());
++		return response;
+ 	}
+ 
+ 	@ResponseBody
+@@ -193,8 +208,9 @@
+ 		final String combinedKey = acknowledgeRequest.getTag() + acknowledgeRequest.getTransactionId();
+ 		logger.info("Acknowledge request for data with combined Key: " + combinedKey + " and crc: "
+ 				+ acknowledgeRequest.getCrc());
+-		reportLogger.fatal(
+-				"Data successfully received by receiver. Validating acknowledge to delete block from blockchain.");
++		reportLogger
++				.fatal("Data successfully received by receiver. Validating acknowledge to delete block from blockchain for transaction id "
++						+ acknowledgeRequest.getTransactionId());
+ 		CustomResponse<String> customResponse = null;
+ 		final BlockStatus blockStatus = blockService.getBlockStatus(acknowledgeRequest.getTag(),
+ 				acknowledgeRequest.getTransactionId());
+@@ -206,7 +222,7 @@
+ 			return customResponse;
+ 		}
+ 		if (blockStatus.getStatus().equals(BlockStatusEnum.DELETED.name())) {
+-			logger.info("As block was already deleted so returning success response.");
++			logger.info("As block was already deleted so returning success response for combine key " + combinedKey);
+ 			reportLogger
+ 					.fatal("Block is already deleted for transaction id : " + acknowledgeRequest.getTransactionId());
+ 			customResponse = new CustomSuccessResponse<>();
+@@ -214,7 +230,6 @@
+ 			return customResponse;
+ 		}
+ 		final Block block = blockService.getBlock(combinedKey);
+-		logger.info("Block got from blockservice is::" + block.toString() + "   for key::" + combinedKey);
+ 		final boolean isValidCRC = transactionFactory.getObject().verifyCRCAndDelete(block, acknowledgeRequest);
+ 		if (!isValidCRC) {
+ 			logger.warn(
+@@ -225,17 +240,20 @@
+ 			customResponse.setMessage(MSG_NOT_VALID);
+ 			return customResponse;
+ 		}
+-		reportLogger.fatal("CRC validated successfully for transaction id : " + acknowledgeRequest.getTransactionId());
+-		logger.info("Block delete acknowledged successfully for combined key: " + combinedKey);
+-		logger.info("TransactionId is valid for given transactions with combined key: " + combinedKey);
++		reportLogger.fatal("For acknowledge reqest CRC validated successfully for transaction id : "
++				+ acknowledgeRequest.getTransactionId());
++		logger.info("For acknowledge reqest CRC validated successfully for combined key: " + combinedKey);
+ 		final boolean flag = blockService.checkAndNotify(acknowledgeRequest.getCrc(), acknowledgeRequest.getTag(),
+ 				acknowledgeRequest.getTransactionId());
+ 		if (!flag) {
++			reportLogger.fatal(DELETED_ALRDY_RECEIVED + " for transaction id " + acknowledgeRequest.getTransactionId());
++			logger.info(DELETED_ALRDY_RECEIVED + " for combine key " + combinedKey);
+ 			customResponse = new CustomErrorResponse<>();
+ 			customResponse.setMessage(DELETED_ALRDY_RECEIVED);
+ 			return customResponse;
+ 		}
+ 		customResponse = new CustomSuccessResponse<>();
++		logger.info(BLOCK_DELETED_SUCCESSFULLY + " for combine key " + combinedKey);
+ 		customResponse.setMessage(BLOCK_DELETED_SUCCESSFULLY);
+ 		return customResponse;
+ 	}
+@@ -274,7 +292,7 @@
+ 	@ResponseBody
+ 	@RequestMapping(value = GET_STATISTICS, method = RequestMethod.GET, produces = MediaType.APPLICATION_JSON_VALUE)
+ 	public Object getAllBlockDetail(@RequestParam("pageNo") final int pageNo) {
+-		CustomResponse<Object> customResponse = null;
++		CustomResponse<StatisticsModel> customResponse = null;
+ 		if (pageNo <= 0) {
+ 			customResponse = new CustomErrorResponse<>();
+ 			customResponse.setMessage("Page No value must be greater than or equal to 1");
+@@ -282,12 +300,11 @@
+ 		}
+ 		customResponse = new CustomSuccessResponse<>();
+ 		customResponse.setMessage("Block status result for page no - " + pageNo);
++		final StatisticsModel model = new StatisticsModel().setTotalBlocks(blockService.totalBlocks())
++				.setSavedCount(blockService.availableBlocks()).setDeletedCount(blockService.getDeletedBlockCount())
++				.setBlocks(blockService.getBlockStatusListByPage(pageNo));
+ 
+-		final Map<String, Object> map = new HashMap<>();
+-		map.put("totalBlocks", blockService.totalBlocks());
+-		map.put("blocks", blockService.getBlockStatusListByPage(pageNo));
+-
+-		((CustomSuccessResponse<Object>) customResponse).setResultSet(map);
++		((CustomSuccessResponse<StatisticsModel>) customResponse).setResultSet(model);
+ 		return customResponse;
+ 	}
+ }
+Index: src/main/java/com/pbc/service/BlockService.java
+===================================================================
+--- src/main/java/com/pbc/service/BlockService.java	(revision 456)
++++ src/main/java/com/pbc/service/BlockService.java	(working copy)
+@@ -5,8 +5,10 @@
+ 
+ import java.io.File;
+ import java.io.IOException;
++import java.io.InputStream;
+ import java.io.RandomAccessFile;
+ import java.nio.file.Files;
++import java.security.DigestInputStream;
+ import java.security.MessageDigest;
+ import java.security.NoSuchAlgorithmException;
+ import java.util.ArrayList;
+@@ -16,8 +18,7 @@
+ import java.util.Map;
+ import java.util.TreeSet;
+ import java.util.UUID;
+-import java.util.concurrent.locks.ReadWriteLock;
+-import java.util.concurrent.locks.ReentrantReadWriteLock;
++import java.util.concurrent.CopyOnWriteArrayList;
+ 
+ import org.apache.log4j.Logger;
+ import org.springframework.beans.factory.ObjectFactory;
+@@ -50,6 +51,10 @@
+ @Service("blockService")
+ public class BlockService {
+ 
++	final String TAG_SECURE_MESSAGE = "secure_message";
++	final String TAG_A2A_SESSIONKEY = "A2A_Sessionkey";
++	final String TAG_A2A_FILE = "A2A_File";
++
+ 	private static ObjectMapper om = new ObjectMapper();
+ 	private static String firstBlockHash = null;
+ 	private static final Logger logger = Logger.getLogger(BlockService.class);
+@@ -64,8 +69,6 @@
+ 	@Autowired
+ 	private NotificationReceiver notificationReceiver;
+ 
+-	private final ReadWriteLock globalLock = new ReentrantReadWriteLock();
+-
+ 	@Autowired
+ 	private PNService pnService;
+ 
+@@ -88,9 +91,8 @@
+ 	 *            Block
+ 	 */
+ 	private void saveBlock(final Block block) {
+-		globalLock.writeLock().lock();
++		Persistor.globalLock.writeLock().lock();
+ 		try {
+-
+ 			final BlockStatus blockStatus = getBlockStatus(block.getBlockContent().getTag(),
+ 					block.getBlockContent().getHashTxnId());
+ 			if (null != blockStatus && !blockStatus.getStatus().equals(BlockStatusEnum.SAVED.name())
+@@ -126,7 +128,7 @@
+ 			reportLogger.fatal("Unable to save block for transaction id : " + block.getBlockContent().getHashTxnId());
+ 			throw new ServiceException("Error occured while adding block.", e);
+ 		} finally {
+-			globalLock.writeLock().unlock();
++			Persistor.globalLock.writeLock().unlock();
+ 		}
+ 	}
+ 
+@@ -137,8 +139,6 @@
+ 	 * @return
+ 	 */
+ 	private List<Block> getBlockList(final Block block) {
+-		// TODO Get list of blocks for transaction id of this block and add to
+-		// this list.
+ 		final List<Block> blockList = new ArrayList<>();
+ 		blockList.add(block);
+ 		return blockList;
+@@ -156,18 +156,18 @@
+ 	 *            transaction id of Block
+ 	 */
+ 	public void removeBlock(final String tag, final String transactionId) {
++		final String combineKey = tag + transactionId;
+ 		try {
+-			jsonPersistor.removeBlockWithHash(tag + transactionId);
+-			// blockStatusDao.updateStatus(tag, transactionId,
+-			// BlockStatusEnum.DELETED.name(), null);
++			jsonPersistor.removeBlockWithHash(combineKey);
+ 			updateDeleteStatus(tag, transactionId, BlockStatusEnum.DELETED.name());
+-			logger.info("Block removed with status deleted for combined key: " + tag + transactionId);
++			logger.info("Block removed with status deleted for combined key: " + combineKey);
++			reportLogger.fatal("Block removed from the Blockchain for transaction id " + transactionId);
+ 		} catch (final DataException | BlockProcessingException de) {
+ 			reportLogger.fatal("Unable to delete block for transaction id : " + transactionId);
+-			logger.error("Error while removing data from block chain for combined key: " + tag + transactionId, de);
++			logger.error("Error while removing data from block chain for combined key: " + combineKey, de);
+ 			throw new ServiceException(de);
+ 		} catch (final Exception e) {
+-			logger.error("Error while removing data from block chain for combined key: " + tag + transactionId, e);
++			logger.error("Error while removing data from block chain for combined key: " + combineKey, e);
+ 			reportLogger.fatal("Unable to delete block for transaction id : " + transactionId);
+ 			throw new ServiceException("Error while removing data from block chain.", e);
+ 		}
+@@ -174,7 +174,7 @@
+ 	}
+ 
+ 	public Block getBlock(final String hash) {
+-		globalLock.readLock().lock();
++		Persistor.globalLock.readLock().lock();
+ 		try {
+ 			return jsonPersistor.getBlock(hash);
+ 		} catch (final BlockProcessingException bpe) {
+@@ -184,7 +184,7 @@
+ 			logger.error("Error while fetching block with combined key: " + hash, e);
+ 			throw new ServiceException("Unable to get block now.", e);
+ 		} finally {
+-			globalLock.readLock().unlock();
++			Persistor.globalLock.readLock().unlock();
+ 		}
+ 	}
+ 
+@@ -251,6 +251,22 @@
+ 		}
+ 	}
+ 
++	public String calculateHash(final InputStream content, final String algoName) throws Exception {
++		final byte[] buffer = new byte[8192];
++		final MessageDigest md = MessageDigest.getInstance(algoName);
++		final DigestInputStream dis = new DigestInputStream(content, md);
++		try {
++			while (dis.read(buffer) != -1) {
++				;
++			}
++		} finally {
++			dis.close();
++		}
++		return convertByteArrayToHexString(md.digest()); // return
++															// DatatypeConverter.printHexBinary(md.digest());
++															// }
++	}
++
+ 	private static String convertByteArrayToHexString(final byte[] arrayBytes) {
+ 		final StringBuffer stringBuffer = new StringBuffer();
+ 		for (final byte arrayByte : arrayBytes) {
+@@ -332,7 +348,6 @@
+ 		} else if (Boolean.TRUE.equals(filePathAndStatus.getStatus())) {
+ 			logger.info(messageForDisplay = "Url is present but expired for given fileId: " + fileId);
+ 		}
+-		temporaryUrlDownloadDao.updateStatus(fileId, true);
+ 		return new FileSystemResource(getErrorMsg(messageForDisplay));
+ 	}
+ 
+@@ -470,29 +485,38 @@
+ 		try {
+ 			final List<BlockStatus> blockStatusList = blockStatusDao.getBlockList(addresses);
+ 
+-			final List<BlockResponseDTO> listOfBlocks = new ArrayList<>();
+-			final List<TemporaryUrlDownload> tDownloads = new ArrayList<>();
++			final List<BlockResponseDTO> listOfBlocks = new CopyOnWriteArrayList<>();
++			final List<TemporaryUrlDownload> tDownloads = new CopyOnWriteArrayList<>();
+ 			final StringBuilder combineKey = new StringBuilder();
+ 
+ 			if (blockStatusList != null && !blockStatusList.isEmpty()) {
+-				logger.info("Getting Blocks at : " + System.currentTimeMillis());
++				logger.info("Getting Blocks of list size : " + blockStatusList.size());
+ 				blockStatusList.forEach(blockStatus -> {
+ 					combineKey.append(blockStatus.getTag()).append(blockStatus.getTransactionId());
++					logger.info("Combine Key : " + combineKey);
+ 					final Block block = jsonPersistor.getBlock(combineKey.toString());
+-					if (null != block) {
+-						final BlockResponseDTO blockResponseDTO = getBlockResponseDTO(block);
+-						final TemporaryUrlDownload urlDownload = new TemporaryUrlDownload(blockResponseDTO.getFileId(),
+-								block.getBlockContent().getFilePath(), false, block.getBlockContent().getDataHash());
+-						tDownloads.add(urlDownload);
+-						listOfBlocks.add(blockResponseDTO);
++
++					if (null != block && block.getBlockContent().getTag().equals(TAG_SECURE_MESSAGE)) {
++						getListOfBlock(block, tDownloads, listOfBlocks);
++					} else if (null != block && block.getBlockContent().getTag().equals(TAG_A2A_SESSIONKEY)) {
++
++						// if (map.get(block.getBlockContent().getHashTxnId())
++						// == null) {
++						// map.put(block.getBlockContent().getHashTxnId(),
++						// block);
++						// } else {
++						// getListOfBlock(map.get(block.getBlockContent().getHashTxnId()),
++						// tDownloads, listOfBlocks);
++						// }
++						final BlockStatus status = blockStatusDao.getStatus(TAG_A2A_FILE,
++								block.getBlockContent().getHashTxnId());
++						if (status != null) {
++							getListOfBlock(block, tDownloads, listOfBlocks);
++						}
+ 					}
+ 					combineKey.setLength(0);
+ 				});
+-				logger.info("All Blocks retrived at : " + System.currentTimeMillis());
+-
+ 				temporaryUrlDownloadDao.bulkUrlInsert(tDownloads);
+-
+-				logger.info("Block Status inseted into DB at : " + System.currentTimeMillis());
+ 				tDownloads.clear();
+ 			}
+ 			return listOfBlocks;
+@@ -505,6 +529,15 @@
+ 		}
+ 	}
+ 
++	private void getListOfBlock(final Block block, final List<TemporaryUrlDownload> tDownloads,
++			final List<BlockResponseDTO> listOfBlocks) {
++		final BlockResponseDTO blockResponseDTO = getBlockResponseDTO(block);
++		final TemporaryUrlDownload urlDownload = new TemporaryUrlDownload(blockResponseDTO.getFileId(),
++				block.getBlockContent().getFilePath(), false, block.getBlockContent().getDataHash());
++		tDownloads.add(urlDownload);
++		listOfBlocks.add(blockResponseDTO);
++	}
++
+ 	/**
+ 	 * Insert a block status entry into block_status table.
+ 	 *
+@@ -516,7 +549,6 @@
+ 			if (getBlockStatus(blockStatus.getTag(), blockStatus.getTransactionId()) == null) {
+ 				logger.info("Block status is null so going to insert" + blockStatus.getTag()
+ 						+ blockStatus.getTransactionId());
+-
+ 				blockStatusDao.insert(blockStatus);
+ 				firstTimeStatus = true;
+ 			}
+@@ -523,11 +555,9 @@
+ 		} catch (final DataException de) {
+ 			logger.error("Can't insert block status with combined key: " + blockStatus.getTag()
+ 					+ blockStatus.getTransactionId(), de);
+-			// throw new ServiceException(de);
+ 		} catch (final Exception e) {
+ 			logger.error("Can't insert block status now with combined key: " + blockStatus.getTag()
+ 					+ blockStatus.getTransactionId(), e);
+-			// throw new ServiceException("Can't insert block status now.", e);
+ 		}
+ 		return firstTimeStatus;
+ 	}
+@@ -587,7 +617,6 @@
+ 
+ 	public boolean checkIfExsist(final String tag, final String transactionId) {
+ 		final BlockStatus blockStatus = blockStatusDao.getStatus(tag, transactionId);
+-
+ 		if (blockStatus == null) {
+ 			return true;
+ 		} else if (blockStatus.getStatus().equals(BlockStatusEnum.BLOCK_TO_BE_CREATED.name())) {
+@@ -617,14 +646,18 @@
+ 		}
+ 	}
+ 
+-	public int totalBlocks() {
+-		return blockStatusDao.getTotalBlock();
++	public long totalBlocks() {
++		return blockStatusDao.getTotalBlockCount();
+ 	}
+ 
+-	public int availableBlocks() {
+-		return blockStatusDao.getAvailableBlock();
++	public long availableBlocks() {
++		return blockStatusDao.getAvailableBlockCount();
+ 	}
+ 
++	public long getDeletedBlockCount() {
++		return blockStatusDao.getDeletedBlockCount();
++	}
++
+ 	public TreeSet<BlockContent> getOrderedSet() {
+ 		if (jsonPersistor instanceof SingleFileJsonPersistor<?>) {
+ 			return ((SingleFileJsonPersistor<Block>) jsonPersistor).getOrderedSet();
+Index: src/main/java/com/pbc/service/TransactionMessageService.java
+===================================================================
+--- src/main/java/com/pbc/service/TransactionMessageService.java	(revision 456)
++++ src/main/java/com/pbc/service/TransactionMessageService.java	(working copy)
+@@ -6,6 +6,7 @@
+ import java.io.IOException;
+ import java.io.InputStream;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.Collections;
+ import java.util.HashMap;
+ import java.util.List;
+@@ -35,13 +36,16 @@
+ import com.pbc.threads.ConversionAndSaveCallableTask;
+ import com.pbc.threads.NotifyNodesRunnableTask;
+ import com.pbc.threads.ThreadPoolUtility;
++import com.pbc.utility.GetSystemIp;
+ import com.pbc.utility.JSONObjectEnum;
+ import com.pbc.utility.StringConstants;
+ 
++@Service
+ @Scope("prototype")
+-@Service
+ public class TransactionMessageService {
+ 
++	private static final Logger logger = Logger.getLogger(TransactionMessageService.class);
++
+ 	@Autowired
+ 	private NotifyNodesRunnableTask notifyNodesRunnableTask;
+ 
+@@ -48,10 +52,11 @@
+ 	@Autowired
+ 	private ConversionAndSaveCallableTask conversionAndSaveCallableTask;
+ 
+-	private static final Logger logger = Logger.getLogger(TransactionMessageService.class);
++	@Autowired
++	private NotificationSender notificationSender;
++
+ 	private static Map<String, List<ConfirmationHelper>> confirmationMap = new ConcurrentHashMap<>();
+ 	private static Map<String, List<String>> crcMap = new ConcurrentHashMap<>();
+-
+ 	private final static String CRC_SEPARATOR = "|$$|";
+ 
+ 	public static Map<String, List<String>> getCrcMap() {
+@@ -75,8 +80,6 @@
+ 	public boolean parseRequestAndValidate(final ParseableBlockDTO parseableBlockDTO, final InputStream file) {
+ 		try {
+ 			final ExecutorService executorService = ThreadPoolUtility.getThreadPool();
+-			logger.info("conversion class object::" + conversionAndSaveCallableTask + "........."
+-					+ parseableBlockDTO.getTag() + parseableBlockDTO.getTransactionId());
+ 			final Future<Map<String, String>> futureStrings = executorService
+ 					.submit(conversionAndSaveCallableTask.setFile(file).setTag(parseableBlockDTO.getTag())
+ 							.setTransactionId(parseableBlockDTO.getTransactionId()));
+@@ -87,19 +90,14 @@
+ 			} catch (InterruptedException | ExecutionException e) {
+ 				logger.error("Executor pool was interruped or there was some execution exception.", e);
+ 			}
+-			// start validation of methods in java.
++			// Start CRC validation.
+ 			final String calculatedCrc = getCRC(createCombineString(parseableBlockDTO).getBytes());
+-			logger.info("Incoming crc :: " + parseableBlockDTO.getCrc() + " :: and Calculated CRC:: " + calculatedCrc);
++			logger.info("Incoming crc: " + parseableBlockDTO.getCrc() + " : and Calculated CRC: " + calculatedCrc);
+ 			if (parseableBlockDTO.getCrc().equals(calculatedCrc)) {
+-				// putCRCValue(parseableBlockDTO.getTag() +
+-				// parseableBlockDTO.getTransactionId(),
+-				// parseableBlockDTO.getCrc());
+ 				logger.info("CRC is valid for given combined key: " + parseableBlockDTO.getTag()
+ 						+ parseableBlockDTO.getTransactionId());
+ 				return true;
+ 			}
+-			// this condition is not clear with what to be done.
+-			// putConfirmationValue(transactionId, Boolean.FALSE);
+ 			logger.warn("CRC is not valid for given combined key: " + parseableBlockDTO.getTag()
+ 					+ parseableBlockDTO.getTransactionId());
+ 			return false;
+@@ -125,10 +123,10 @@
+ 
+ 	/* Generate CRC */
+ 	public String getCRC(final byte[] textBytes) {
+-		logger.info("Data bytes for crc calculation: " + textBytes);
+ 		final Checksum checksum = new CRC32();
+ 		checksum.update(textBytes, 0, textBytes.length);
+ 		final long crcOfMessageTxnID = checksum.getValue();
++		Arrays.fill(textBytes, (byte) 0);
+ 		return Long.toHexString(crcOfMessageTxnID);
+ 	}
+ 
+@@ -164,7 +162,7 @@
+ 			combinedKey = combinedKey + StringConstants.DELETE_TAG;
+ 		}
+ 		final List<String> crcValues = getCrcMap().get(combinedKey);
+-		logger.info("Crc map size:: " + crcValues + " at the time of validity confirmation for tag :: " + combinedKey);
++		logger.info("Crc map size:: " + crcValues + " at the time of validity confirmation for tag:: " + combinedKey);
+ 		if (crcValues != null && crcValues.size() >= MIN_NODE_VALIDITY && crcValues.size() <= TOTAL_NODES) {
+ 			final CompleteRequest completeRequest = new CompleteRequest();
+ 			completeRequest.setTransactionId(notificationObject.getTransactionId());
+@@ -172,32 +170,25 @@
+ 			completeRequest.setTag(notificationObject.getTag());
+ 			final boolean isVerifyCRC = verifyCRCs(crcValues);
+ 			final boolean allCRCsVerified = isNotNotifiedAlready(combinedKey) && isVerifyCRC;
+-			logger.info("allCRCsVerified:: " + allCRCsVerified + notificationObject.getTag()
+-					+ notificationObject.getTransactionId());
+-			logger.info("isVerifyCRC:: " + allCRCsVerified + notificationObject.getTag()
+-					+ notificationObject.getTransactionId());
+-			final NotificationSender notificationSender = new NotificationSender();
++			logger.info("allCRCsVerified:: " + allCRCsVerified + " isVerifyCRC:: " + isVerifyCRC
++					+ notificationObject.getTag() + notificationObject.getTransactionId());
+ 			if (allCRCsVerified) {
+ 				notificationSender.setCompleteRequest(completeRequest);
+ 				putConfirmationValue(combinedKey, allCRCsVerified);
+-
+-				logger.info("size of confirmation map before writing notification::"
+-						+ getConfirmationMap().get(combinedKey) + "..." + combinedKey);
+-				logger.info("size of crc map before writing notification::" + getCrcMap().get(combinedKey));
+-
++				logger.info("size of confirmation map and crc before writing notification::"
++						+ getConfirmationMap().get(combinedKey).size() + " :: " + getCrcMap().get(combinedKey).size()
++						+ " for key " + combinedKey);
+ 				notificationSender.notifyAllHosts(isDelete, JSONObjectEnum.VALIDITY, allCRCsVerified);
+-				confirmationMap.get(combinedKey).get(0).setHostName(StringConstants.LOCAL_HOST);
+-				logger.info("All crcs verified. Broadcasting confirmation to other nodes." + combinedKey);
++				confirmationMap.get(combinedKey).get(0).setHostName(GetSystemIp.getSystemLocalIp());
++				logger.info("All crcs verified. Broadcasting confirmation to other nodes for key " + combinedKey);
+ 			} else if (crcValues.size() >= TOTAL_NODES && !isVerifyCRC) {
+-				logger.info("verifying crc false and crc values are equals total nodes"
+-						+ getConfirmationMap().get(combinedKey) + "..." + combinedKey);
++				logger.info("verifying crc false and crc values are equals total nodes "
++						+ getConfirmationMap().get(combinedKey).size() + " for key " + combinedKey);
+ 				notificationSender.notifyAllHosts(isDelete, JSONObjectEnum.VALIDITY, allCRCsVerified);
+ 				putConfirmationValue(combinedKey, allCRCsVerified);
+ 			}
+ 		} else {
+-			logger.info("Waiting for more crcs from other nodes." + "..." + combinedKey);
+-			// do nothing. So this block is useless and should not be here.
+-			// But it make the code flow more understandable.
++			logger.info("Waiting for more crcs from other nodes for key " + combinedKey);
+ 		}
+ 	}
+ 
+@@ -206,7 +197,7 @@
+ 		if (listOfConfirmation == null || listOfConfirmation.get(0).getHostName() == null) {
+ 			return true;
+ 		}
+-		return !listOfConfirmation.get(0).getHostName().equals(StringConstants.LOCAL_HOST);
++		return !listOfConfirmation.get(0).getHostName().equals(GetSystemIp.getSystemLocalIp());
+ 	}
+ 
+ 	private boolean verifyCRCs(final List<String> crcValues) {
+@@ -252,8 +243,6 @@
+ 	 * @return boolean
+ 	 */
+ 	public boolean verifyCRCAndDelete(final Block block, final AcknowledgeRequest ackRequest) {
+-		logger.info("transactionMessageService Object::" + TransactionMessageService.class + "::" + ackRequest.getTag()
+-				+ ackRequest.getTransactionId());
+ 		try {
+ 			if (null == block) {
+ 				throw new ServiceException("Block is not received at this node yet.");
+@@ -266,19 +255,19 @@
+ 					.setAppId(blockContent.getAppId()).setSessionKey(blockContent.getSessionKey())
+ 					.setTimeStamp(blockContent.getTimestamp()).setReceiver(blockContent.getPublicAddressOfReciever())
+ 					.setSender(blockContent.getSender()).setWebServerKey(blockContent.getWebServerKey());
+-			;
++
+ 			final String combinedString = createCombineString(parseableBlockDTO);
+-			logger.info("combined string for generating CRC for deletion::" + combinedString + ":::"
++			logger.info("Combined string for generating CRC for deletion:: " + combinedString + " for key "
+ 					+ ackRequest.getTag() + ackRequest.getTransactionId());
+ 			final String calculatedCRC = getCRC(combinedString.getBytes());
+-			logger.info("DELETED:: calculated CRC::" + calculatedCRC + ":: incoming crc::" + ackRequest.getCrc() + "::"
+-					+ ackRequest.getTag() + ackRequest.getTransactionId());
++			logger.info("For Deletion calculated CRC:: " + calculatedCRC + " incoming crc:: " + ackRequest.getCrc()
++					+ " for key " + ackRequest.getTag() + ackRequest.getTransactionId());
+ 			if (calculatedCRC.equals(ackRequest.getCrc())) {
+ 				logger.info("Putting own block delete crc into crcpMap " + getCrcMap()
+ 						.get(ackRequest.getTag() + ackRequest.getTransactionId() + StringConstants.DELETE_TAG));
+ 				return true;
+ 			}
+-			// this condition is not clear with what to be done.
++			// This condition is not clear with what to be done.
+ 			return false;
+ 		} catch (final Exception e) {
+ 			logger.error("Unable to verify CRC.", e);
+@@ -296,8 +285,7 @@
+ 	public void createTaskToNotify(final String crc, final String tag, final String transactionId,
+ 			final boolean isDelete) {
+ 		try {
+-			logger.info("inside create task to notify::" + tag + transactionId);
+-			logger.info("object of notifyNodesRunnableTask::" + notifyNodesRunnableTask + tag + transactionId);
++			logger.info("Inside create task to notify:: " + tag + transactionId);
+ 			final ExecutorService executorService = ThreadPoolUtility.getThreadPool();
+ 			executorService.execute(notifyNodesRunnableTask.setDelete(isDelete).setCrc(crc).setTag(tag)
+ 					.setTransactionId(transactionId));
+Index: src/main/java/com/pbc/service/UtilityService.java
+===================================================================
+--- src/main/java/com/pbc/service/UtilityService.java	(revision 456)
++++ src/main/java/com/pbc/service/UtilityService.java	(working copy)
+@@ -7,7 +7,6 @@
+ 
+ @Service("utilityService")
+ public class UtilityService {
+-
+ 	public static CustomResponse<Object> getCustomResponseEnum(final CustomResponse<Object> customResponse,
+ 			final Enum<BlockStatusEnum> enumValue) {
+ 		customResponse.setMessage(enumValue.name());
+Index: src/main/java/com/pbc/threads/ConversionAndSaveCallableTask.java
+===================================================================
+--- src/main/java/com/pbc/threads/ConversionAndSaveCallableTask.java	(revision 456)
++++ src/main/java/com/pbc/threads/ConversionAndSaveCallableTask.java	(working copy)
+@@ -1,5 +1,7 @@
+ package com.pbc.threads;
+ 
++import java.io.File;
++import java.io.FileInputStream;
+ import java.io.IOException;
+ import java.io.InputStream;
+ import java.util.HashMap;
+@@ -58,22 +60,25 @@
+ 	@Override
+ 	public Map<String, String> call() throws Exception {
+ 		// This code block might potentially throw an IOException.
+-		logger.info("going inside SaveCallBackTask::" + "-----------" + tag + transactionId);
+-		byte[] encryptedData = getBytesFromInputStream(file);
+-		logger.info("encryptedData::" + encryptedData + "-----------" + tag + transactionId);
+-		// IOException potential code ends here.
+-		final String dataHash = blockService.calculateHash(encryptedData, "SHA-256");
+-		logger.info("datahash::" + dataHash + "-----------" + tag + transactionId);
++		logger.info("Going inside SaveCallBackTask for key " + tag + transactionId);
++		// final byte[] encryptedData = getBytesFromInputStream(file);
++
+ 		String filePath = null;
+ 		try {
+ 			logger.info("Saving object on disk for combined key: " + tag + transactionId);
+-			filePath = ioFileUtil.writObjectLocally(encryptedData, tag + transactionId);
++			filePath = ioFileUtil.writObjectLocally(file, tag + transactionId);
++
++			// IOException potential code ends here.
++
+ 		} catch (final BlockProcessingException e) {
+ 			// This message is not saved in bucket.
+ 			// Block status is now not available.
+ 			logger.error("Unable to save file locally ", e);
+ 		}
+-		encryptedData = null;
++
++		final String dataHash = blockService.calculateHash(new FileInputStream(new File(filePath)), "SHA-256");
++		logger.info("Calculated data hash ::" + dataHash + " for key " + tag + transactionId);
++		// Arrays.fill(encryptedData, (byte) 0);
+ 		final Map<String, String> map = new HashMap<>();
+ 		map.put(StringConstants.HASH_KEY_STRING, dataHash);
+ 		map.put(StringConstants.SAVED_FILE_PATH, filePath);
+@@ -84,5 +89,4 @@
+ 		final byte[] bytes = IOUtils.toByteArray(is);
+ 		return bytes;
+ 	}
+-
+ }
+Index: src/main/java/com/pbc/threads/SaveBlockRunnableTask.java
+===================================================================
+--- src/main/java/com/pbc/threads/SaveBlockRunnableTask.java	(revision 456)
++++ src/main/java/com/pbc/threads/SaveBlockRunnableTask.java	(working copy)
+@@ -33,7 +33,6 @@
+ 	@Override
+ 	public void run() {
+ 		try {
+-
+ 			logger.info("Block creation start inside saveblockrunnabletask: " + parseableBlockDTO.getTag()
+ 					+ parseableBlockDTO.getTransactionId());
+ 			blockService.createAndSaveBlock(parseableBlockDTO);
+@@ -41,8 +40,7 @@
+ 					+ parseableBlockDTO.getTransactionId());
+ 		} catch (final Exception e) {
+ 			logger.error("Error while saving data for combined key: " + parseableBlockDTO.getTag()
+-					+ parseableBlockDTO.getTransactionId());
+-			logger.error("@SEE Full stack trace: ", e);
++					+ parseableBlockDTO.getTransactionId(), e);
+ 		}
+ 	}
+ }
+Index: src/main/java/com/pbc/utility/ConfigConstants.java
+===================================================================
+--- src/main/java/com/pbc/utility/ConfigConstants.java	(revision 456)
++++ src/main/java/com/pbc/utility/ConfigConstants.java	(working copy)
+@@ -19,6 +19,9 @@
+ 			.parseInt(PropertiesReader.getProperty("portNoTagTxnPushNotifyReceive"));
+ 	public static final int PORT_FOR_PUSH_SEND = Integer
+ 			.parseInt(PropertiesReader.getProperty("portNoTagTxnPushNotifySend"));
++	public static final int PORT_FOR_BLOCK_FILE = Integer
++			.parseInt(PropertiesReader.getProperty("portNoFileBlockReceive"));
++
+ 	public static final int PORT_NO_TAGTXD_SEND = Integer.parseInt(PropertiesReader.getProperty("portNoTagTxnSend"));
+ 	public static final int TOTAL_NODES = Integer.parseInt(PropertiesReader.getProperty("totalNodes"));
+ 	public static final int MIN_NODE_VALIDITY = Integer.parseInt(PropertiesReader.getProperty("minNodeValidity"));
+Index: src/main/java/com/pbc/utility/GetSystemIp.java
+===================================================================
+--- src/main/java/com/pbc/utility/GetSystemIp.java	(revision 0)
++++ src/main/java/com/pbc/utility/GetSystemIp.java	(working copy)
+@@ -0,0 +1,38 @@
++package com.pbc.utility;
++
++import java.io.InputStream;
++
++import org.apache.log4j.Logger;
++import org.springframework.stereotype.Component;
++
++@Component
++public class GetSystemIp {
++	private static final Logger logger = Logger.getLogger(GetSystemIp.class);
++
++	private static String systemLocalIp = "";
++
++	public void initializeIpLocal() {
++		try {
++			int count = 0;
++			final StringBuilder ipAddress = new StringBuilder();
++
++			final Process process = Runtime.getRuntime()
++					.exec("wget -qO- http://instance-data/latest/meta-data/public-ipv4");
++
++			final InputStream inputStream2 = process.getInputStream();
++			while ((count = inputStream2.read()) != -1) {
++				ipAddress.append((char) count);
++			}
++			logger.info("Calculated Local Ip address: " + ipAddress.toString());
++			systemLocalIp = ipAddress.toString();
++			logger.info("System Local Ip address: " + systemLocalIp);
++		} catch (final Exception e) {
++
++		}
++	}
++
++	public static String getSystemLocalIp() {
++		return systemLocalIp;
++	}
++
++}
+\ No newline at end of file
+Index: src/main/java/com/pbc/utility/IOFileUtil.java
+===================================================================
+--- src/main/java/com/pbc/utility/IOFileUtil.java	(revision 456)
++++ src/main/java/com/pbc/utility/IOFileUtil.java	(working copy)
+@@ -5,8 +5,11 @@
+ import java.io.File;
+ import java.io.FileOutputStream;
+ import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
+ import java.io.Serializable;
+ 
++import org.apache.commons.io.IOUtils;
+ import org.apache.log4j.Logger;
+ import org.springframework.beans.factory.annotation.Autowired;
+ import org.springframework.stereotype.Component;
+@@ -43,13 +46,30 @@
+ 			fos.write(dataBytes);
+ 			fos.close();
+ 		} catch (final IOException e) {
+-			logger.error("Object could not be saved on local files because of some I/O error.");
+-			throw new BlockProcessingException("Object could not be saved on local files because of some I/O error.",
+-					e);
++			logger.error("Object could not be saved on local files because of some I/O error", e);
++			throw new BlockProcessingException("Object could not be saved on local files", e);
+ 		}
+ 		return completeFilePath;
+ 	}
+ 
++	public String writObjectLocally(final InputStream stream, final String fileName) {
++		final String completeFilePath = getCompletePath(fileName, getCorrectFolderPath());
++		try {
++			final File targetFile = new File(completeFilePath);
++			final OutputStream outStream = new FileOutputStream(targetFile);
++			final byte[] buffer = new byte[8 * 1024];
++			int bytesRead;
++			while ((bytesRead = stream.read(buffer)) != -1) {
++				outStream.write(buffer, 0, bytesRead);
++			}
++			IOUtils.closeQuietly(outStream);
++		} catch (final Exception e) {
++			logger.error("Object could not be saved on local files because of some I/O error", e);
++			throw new BlockProcessingException("Object could not be saved on local files", e);
++		}
++		return completeFilePath;
++	}
++
+ 	/**
+ 	 * This method returns correct folder path used for saving objects. This
+ 	 * method solves common errors involving extra(or absence) of "/" in folder
+Index: src/main/java/com/pbc/utility/StringConstants.java
+===================================================================
+--- src/main/java/com/pbc/utility/StringConstants.java	(revision 456)
++++ src/main/java/com/pbc/utility/StringConstants.java	(working copy)
+@@ -1,8 +1,6 @@
+ package com.pbc.utility;
+ 
+ public class StringConstants {
+-	public static final String BLOCKINFO_PATH = System.getProperty("user.dir") + "/" + "BlockInfo.json";
+-	public static String LOCAL_HOST = "127.0.0.1";
+ 	public static final String HASH_KEY_STRING = "DATA_HASH";
+ 	public static final String SAVED_FILE_PATH = "FILE_PATH";
+ 	public static final String SPACE = " ";
+Index: src/main/resources/config.properties
+===================================================================
+--- src/main/resources/config.properties	(revision 456)
++++ src/main/resources/config.properties	(working copy)
+@@ -1,5 +1,4 @@
+ folderPath=/home/ec2-user/pbc_files
+-#folderPath=/home/linchpinub4/Desktop/Blocks
+ portNoBlock=60005
+ portNoDelete=60006
+ portNoSynchronization=60007
+@@ -7,14 +6,12 @@
+ portNoTagTxnSend=60009
+ portNoTagTxnPushNotifyReceive=60010
+ portNoTagTxnPushNotifySend=60011
++portNoFileReceive=60012
++portNoFileBlockReceive=60013
+ minNodeValidity=2
+ totalNodes=3
+-#nodes=127.0.0.1,192.168.11.122,192.168.11.120,192.168.11.35,192.168.11.85
+-#synchronizationNodes=127.0.0.1,192.168.11.122,192.168.11.120,192.168.11.35,192.168.11.85
+-
+-nodes=54.201.221.242,54.149.25.71,54.244.98.107
+-synchronizationNodes=54.201.221.242,54.149.25.71,54.244.98.107
++nodes=54.203.197.40,54.202.229.230,34.212.133.169
++synchronizationNodes=54.203.197.40,54.202.229.230,34.212.133.169
+ blockchain_controller=/blockchain_controller.json
+ reportLogFilePath=/opt/apache-tomcat-8.5.15/logs
+-#reportLogFilePath=/home/linchpinub4/Documents/apache-tomcat-8.0.33/logs
+ reportLogFile=/pbc_reports.log
